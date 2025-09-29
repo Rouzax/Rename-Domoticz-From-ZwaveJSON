@@ -1,24 +1,31 @@
 # ⚠️ WARNING: USE AT YOUR OWN RISK
 
-This script modifies the **Domoticz database** to rename devices based on a **Zwave JS JSON export**. Improper use may lead to data loss or unintended changes.
+This script modifies the **Domoticz database** to rename devices based on a **Z-Wave JS JSON export**. Improper use may lead to data loss or unintended changes.
 
 Before running the script:
+
 1. **Backup your Domoticz database** – The script automatically creates a timestamped backup before making any changes.
 2. **Review the renaming logic** – Ensure it aligns with your device naming conventions.
 3. **Test in a safe environment** – If possible, test on a separate instance before running on your production setup.
 
+---
+
 ## 📥 Requirements
 
-- **PowerShell 7+**
-- **PSSQLite Module** (Install with `Install-Module -Name PSSQLite`)
-- **Zwave JS UI** with JSON export
+* **PowerShell 5.1+**
+* **PSSQLite Module** (Install with `Install-Module -Name PSSQLite`)
+* **Z-Wave JS UI** with JSON export
 
-## 🔄 How to Export the JSON from Zwave JS UI
+---
 
-1. Navigate to **Zwave JS UI**.
-2. Open the **General Actions** menu.
-3. Click **Dump → EXPORT** to download a full JSON export of all nodes.
+## 🔄 How to Export the JSON from Z-Wave JS UI
+
+1. Open **Z-Wave JS UI**.
+2. Go to **General Actions**.
+3. Choose **Dump → EXPORT** to download a full JSON export of all nodes.
 4. Save the file for use with this script.
+
+---
 
 ## ⚙️ Script Parameters
 
@@ -26,108 +33,194 @@ Before running the script:
 .\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db"
 ```
 
-### Parameters:
-- `-JsonFile` → Path to the exported JSON file from Zwave JS UI.
-- `-DbPath` → Path to your **Domoticz database** (`domoticz.db`).
-- `-LogFile` (optional) → Path to store debug logs (defaults to script directory).
-- `-CsvFile` (optional) → Path to store renaming summary in CSV format.
+### Parameters
+
+* `-JsonFile` → Path to the exported JSON file from Z-Wave JS UI. **(Required)**
+* `-DbPath` → Path to your **Domoticz database** (`domoticz.db`). **(Required)**
+* `-LogFile` (optional) → Path to store the debug log.
+  Default: script folder `\rename_log.txt`, else **DB folder** if script folder isn’t available; on failure the script falls back to **system TEMP**.
+* `-CsvFile` (optional) → Path to store the **renaming summary (only actual changes)**.
+  Default: script folder `\rename_summary.csv`, else **DB folder** if script folder isn’t available; on failure the script falls back to **system TEMP**.
+
+---
 
 ## 🏗️ Naming Scheme
 
 Device names are constructed using:
+
 ```
 [Room Name] - [Device Name] - [Property Label]
 ```
-- `Room Name` → Extracted from `loc` in JSON.
-- `Device Name` → Extracted from `name` in JSON.
-- `Property Label` → Extracted from `label` in JSON.
+
+* `Room Name` → From `loc` in JSON.
+* `Device Name` → From `name` in JSON.
+* `Property Label` → From `label` in JSON.
 
 ### 🔄 Renaming Rules
-1. **Standard Naming:**
-   - Example:
-     - JSON: `{ "loc": "Room A", "name": "Light", "label": "Current Value" }`
-     - New Name: **`Room A - Light - Current Value`**
 
-2. **Remove "Current Value" from Specific IDs:**
-   - If the device ID ends in `-currentValue`, remove "- Current value" from the name.
-   - Example:
-     - JSON: `{ "loc": "Room A", "name": "Ceiling Light", "label": "Current Value" }`
-     - New Name: **`Room A - Ceiling Light`**
+1. **Standard Naming Example**
 
-3. **Electric Consumption Formatting:**
-   - `-50-1-value-66049` → `[W]`
-   - `-50-1-value-65537` → `[kWh]`
-   - Example:
-     - JSON: `{ "loc": "Room B", "name": "Lamp", "label": "Electric Consumption [W]" }`
-     - New Name: **`Room B - Lamp [W]`**
+   ```json
+   { "loc": "Room A", "name": "Light", "label": "Current Value" }
+   ```
 
-4. **Temperature & Light Sensors:**
-   - `-49-0-Air_temperature` → Rename "Air temperature" → "Temp"
-   - `-49-0-Illuminance` → Rename "Illuminance" → "Lux"
-   - Example:
-     - JSON: `{ "loc": "Outdoor", "name": "Sensor", "label": "Air temperature" }`
-     - New Name: **`Outdoor - Sensor - Temp`**
+   → **`Room A - Light - Current Value`**
 
-5. **Motion Sensor Formatting:**
-   - `-113-0-Home_Security-Motion_sensor_status` → Rename "Motion sensor status" → "Motion"
-   - Example:
-     - JSON: `{ "loc": "Outdoor", "name": "Sensor", "label": "Motion sensor status" }`
-     - New Name: **`Outdoor - Sensor - Motion`**
+2. **Remove “Current Value” for specific IDs**
 
-6. **Preserve `$` Prefix in Old Names:**
-   - If an existing name in the **Domoticz database** starts with `$`, ensure the new name **also starts with `$`**.
-   - Example:
-     - Old Name: `$Living Room - Lights`
-     - New Name: `$Living Room - Lights - Brightness`
+   * IDs ending in `38-1-currentValue` or `37-0-currentValue`
 
-7. **Fix Spaces in DeviceID Lookups:**
-   - Domoticz replaces spaces with underscores (`_`).
-   - Example:
-     - Looking up `zwavejs2mqtt_XXXXXXXX_42-49-0-Air temperature`
-     - Search instead for: `zwavejs2mqtt_XXXXXXXX_42-49-0-Air_temperature`
+   ```json
+   { "loc": "Room A", "name": "Ceiling Light", "label": "Current Value" }
+   ```
+
+   → **`Room A - Ceiling Light`**
+
+3. **Electric Consumption Formatting**
+
+   * `-50-1-value-66049` → `[W]`
+   * `-50-1-value-65537` → `[kWh]`
+
+   ```json
+   { "loc": "Room B", "name": "Lamp", "label": "Electric Consumption [W]" }
+   ```
+
+   → **`Room B - Lamp [W]`**
+
+4. **Temperature & Light Sensors**
+
+   * `-49-0-Air_temperature` → “Air temperature” → “Temp”
+   * `-49-0-Illuminance` → “Illuminance” → “Lux”
+
+   ```json
+   { "loc": "Outdoor", "name": "Sensor", "label": "Air temperature" }
+   ```
+
+   → **`Outdoor - Sensor - Temp`**
+
+5. **Motion Sensor Formatting**
+
+   * `-113-0-Home_Security-Motion_sensor_status` → “Motion sensor status” → “Motion”
+
+   ```json
+   { "loc": "Outdoor", "name": "Sensor", "label": "Motion sensor status" }
+   ```
+
+   → **`Outdoor - Sensor - Motion`**
+
+6. **Preserve `$` Prefix**
+   If the old name in Domoticz starts with `$`, the new name **also** starts with `$`.
+   Example:
+
+   * Old: `$Living Room - Lights`
+   * New: `$Living Room - Lights - Brightness`
+
+7. **DeviceID Spaces → Underscores**
+   Domoticz replaces spaces with underscores in `DeviceID`.
+   Example:
+
+   * JSON: `zwavejs2mqtt_XXXXXXXX_42-49-0-Air temperature`
+   * DB:   `zwavejs2mqtt_XXXXXXXX_42-49-0-Air_temperature`
+
+---
 
 ## 📊 Output
 
-### Logging
-- The script logs all rename actions to a **log file** (default: `rename_log.txt`).
-- The log contains:
-  - Database connection details
-  - Base identifier lookup
-  - Rename actions (success/failure)
+### Console
 
-### CSV Report
-- The script generates a **CSV file** with renamed devices.
-- Example CSV format:
+* Progress bar during processing.
+* Final summary with counts and paths:
 
 ```
+Summary: Renamed=75; Unchanged=454; Missing=4113; Errors=0
+Log: C:\TEMP\rename_log.txt
+CSV: C:\TEMP\rename_summary.csv
+```
+
+### Logging
+
+* The script logs all rename actions to a **log file** (default: `rename_log.txt`).
+* The log includes:
+
+  * Database backup location
+  * Database connection info
+  * Base identifier used
+  * UNCHANGED / Renaming / SUCCESS / ERROR lines
+  * Transaction commit/rollback details
+  * Final counts
+
+### CSV Report
+
+* Generated **only if devices were actually renamed**.
+* CSV format:
+
+```csv
 DeviceID,OldName,NewName
 zwavejs2mqtt_XXXXXXXX_42-49-0-Air_temperature,"Outdoor - Sensor - Air temperature","Outdoor - Sensor - Temp"
 zwavejs2mqtt_XXXXXXXX_50-1-value-66049,"Room B - Lamp - Electric Consumption [W]","Room B - Lamp [W]"
 ```
 
+---
+
 ## 🛠️ Database Backup
-- Before making changes, the script **creates a backup** of `domoticz.db`.
-- Backup is stored in the **same folder as the original database** with a timestamp:
-  - Example: `domoticz-2025.02.17-14.30.45.db`
+
+Before making changes, the script **creates a backup** of `domoticz.db`.
+
+* Stored in the **same folder as the original DB**
+* Filename format:
+
+  ```
+  domoticz-yy.MM.dd-HH.mm.ss.db
+  ```
+
+---
 
 ## 🏁 Running the Script
 
+Basic run:
+
 ```powershell
-.\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "C:\Domoticz\domoticz.db" -LogFile "C:\Logs\rename_log.txt" -CsvFile "C:\Reports\renaming_summary.csv"
+.\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "C:\Domoticz\domoticz.db"
 ```
+
+With custom output locations:
+
+```powershell
+.\Rename-Domoticz-From-ZwaveJSON.ps1 `
+  -JsonFile "nodes_dump.json" `
+  -DbPath   "C:\Domoticz\domoticz.db" `
+  -LogFile  "C:\Logs\rename_log.txt" `
+  -CsvFile  "C:\Reports\renaming_summary.csv"
+```
+
+---
 
 ## 🔄 Reverting Changes
-If something goes wrong, you can **restore the backup** created by the script:
+
+If something goes wrong, restore the backup created by the script:
+
 ```powershell
-Copy-Item -Path "C:\Domoticz\domoticz-2025.02.17-14.30.45.db" -Destination "C:\Domoticz\domoticz.db" -Force
+Copy-Item -Path "C:\Domoticz\domoticz-25.09.29-14.30.45.db" -Destination "C:\Domoticz\domoticz.db" -Force
 ```
 
+---
+
 ## ❓ Troubleshooting
-- **"PSSQLite module missing"** → Run `Install-Module -Name PSSQLite` in PowerShell.
-- **"DeviceID not found"** → Check if spaces are replaced with underscores in the database.
-- **"Base Identifier not found"** → Ensure your JSON export contains valid `identifiers` under `hassDevices`.
+
+* **“PSSQLite module missing”** → Run:
+
+  ```powershell
+  Install-Module -Name PSSQLite -Scope CurrentUser
+  ```
+* **“DeviceID not found”** → Check that JSON IDs match Domoticz DB IDs (spaces replaced with underscores).
+* **“Base Identifier not found”** → Verify your JSON export has `identifiers` under `hassDevices`.
+* **Logs/CSV not where expected** → The script auto-falls back: Script folder → DB folder → `%TEMP%`.
+  See the console summary for actual paths.
 
 ---
 
 ⚠️ **DISCLAIMER:** This script modifies your database. Use it at your own risk! Always keep a backup of your Domoticz database before running. 🚀
 
+---
+
+Would you like me to also add a **sample log excerpt** (with UNCHANGED, Renaming, SUCCESS) in the README so users can see exactly what to expect inside `rename_log.txt`?
