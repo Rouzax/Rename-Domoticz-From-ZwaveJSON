@@ -220,7 +220,3 @@ Copy-Item -Path "C:\Domoticz\domoticz-25.09.29-14.30.45.db" -Destination "C:\Dom
 ---
 
 ⚠️ **DISCLAIMER:** This script modifies your database. Use it at your own risk! Always keep a backup of your Domoticz database before running. 🚀
-
----
-
-Would you like me to also add a **sample log excerpt** (with UNCHANGED, Renaming, SUCCESS) in the README so users can see exactly what to expect inside `rename_log.txt`?
