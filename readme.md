@@ -1,12 +1,22 @@
-# ⚠️ WARNING: USE AT YOUR OWN RISK
+# Domoticz Device Renamer for Z-Wave JS
 
-This script modifies the **Domoticz database** to rename devices based on a **Z-Wave JS JSON export**. Improper use may lead to data loss or unintended changes.
+Automatically rename your Domoticz devices based on the room and device names configured in Z-Wave JS UI.
 
-Before running the script:
+**The problem:** When Z-Wave JS creates devices in Domoticz via MQTT Auto-Discovery, they get generic names like `zwavejs2mqtt_0xc15d8aa6_42-49-0-Air_temperature`. Finding the right device becomes a nightmare.
 
-1. **Backup your Domoticz database** — The script automatically creates a timestamped backup before making any changes.
-2. **Review the renaming logic** — Ensure it aligns with your device naming conventions.
-3. **Test with DryRun first** — Use `-DryRun` to preview changes without modifying the database.
+**The solution:** This script reads your Z-Wave JS export and renames devices to friendly names like `Living Room - Motion Sensor - Motion`, matching your Z-Wave JS configuration. It can also fix device types (so smoke detectors get a Reset button, motion sensors show the right icon, etc.).
+
+---
+
+## ⚠️ Important: Use with Care
+
+This script modifies the **Domoticz database** directly. While it includes safety features, improper use may lead to unintended changes.
+
+**Before running:**
+
+1. **Test with `-DryRun` first** — Preview changes without modifying anything
+2. **Let it create a backup** — The script automatically backs up your database
+3. **Review the HTML report** — Check the changes look correct before running live
 
 ---
 
