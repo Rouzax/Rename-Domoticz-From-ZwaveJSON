@@ -1125,7 +1125,7 @@ foreach ($Device in $ZwaveData) {
 
         $PropertyID = [string]$Value.id
         $Label = [string]$Value.label
-        $DeviceID = "${BaseIdentifier}_${PropertyID}" -replace " ", "_"
+        $DeviceID = ("${BaseIdentifier}_${PropertyID}" -replace " ", "_") -replace "/", "-"
 
         # Check exclusions
         if (Test-DeviceExcluded -DeviceID $DeviceID -ExcludeIds $ExcludeDeviceIds -ExcludePattern $ExcludePattern) {

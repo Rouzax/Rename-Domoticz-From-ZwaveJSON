@@ -176,6 +176,7 @@ Device names are constructed using:
 
 1. **Preserve `$` Prefix** — If the old name starts with `$`, the new name also starts with `$`.
 2. **DeviceID Spaces → Underscores** — Domoticz replaces spaces with underscores in `DeviceID`.
+3. **DeviceID Slashes → Hyphens** — Domoticz replaces forward slashes with hyphens in `DeviceID`.
 
 ---
 

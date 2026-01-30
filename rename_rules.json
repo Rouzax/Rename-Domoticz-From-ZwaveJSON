@@ -101,6 +101,13 @@
       "replace": " - Tampering, product cover removed$",
       "with": " - Tamper",
       "description": "Shortens tamper detection label (any endpoint)"
+    },
+    {
+      "name": "Door/Window Sensor State",
+      "pattern": "48-\\d+-Door-Window$",
+      "replace": " - Sensor state \\(Door/Window\\)$",
+      "with": " - Door",
+      "description": "Shortens door/window sensor state label (any endpoint)"
     }
   ]
 }
