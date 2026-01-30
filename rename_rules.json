@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Custom renaming rules for Rename-Domoticz-From-ZwaveJSON.ps1",
+  "_comment": [
+    "ENDPOINT PATTERN REFERENCE:",
+    "  [01]     = endpoints 0 or 1 only (default - treats these as 'primary')",
+    "  \\d+     = any endpoint (0, 1, 2, 3, ...)",
+    "  0        = endpoint 0 only",
+    "  1        = endpoint 1 only",
+    "  [012]    = endpoints 0, 1, or 2",
+    "",
+    "EXAMPLE: If you want ALL endpoints to have suffix removed (risking collisions on multi-channel devices):",
+    "  Change: \"pattern\": \"37-[01]-currentValue$\"",
+    "  To:     \"pattern\": \"37-\\\\d+-currentValue$\"",
+    "",
+    "EXAMPLE: If you only want endpoint 0 devices renamed:",
+    "  Change: \"pattern\": \"37-[01]-currentValue$\"",
+    "  To:     \"pattern\": \"37-0-currentValue$\""
+  ],
+  "rules": [
+    {
+      "name": "Remove Current Value for Switch Multilevel",
+      "pattern": "38-[01]-currentValue$",
+      "replace": " - Current value$",
+      "with": "",
+      "description": "Removes 'Current Value' suffix for dimmer/multilevel switch devices (endpoint 0 or 1)"
+    },
+    {
+      "name": "Remove Current Value for Switch Binary",
+      "pattern": "37-[01]-currentValue$",
+      "replace": " - Current value$",
+      "with": "",
+      "description": "Removes 'Current Value' suffix for binary switch devices (endpoint 0 or 1)"
+    },
+    {
+      "name": "Electric Consumption Watts",
+      "pattern": "50-\\d+-value-66049$",
+      "replace": " - Electric Consumption \\[W\\]$",
+      "with": " [W]",
+      "description": "Shortens wattage consumption label (any endpoint)"
+    },
+    {
+      "name": "Electric Consumption kWh",
+      "pattern": "50-\\d+-value-65537$",
+      "replace": " - Electric Consumption \\[kWh\\]$",
+      "with": " [kWh]",
+      "description": "Shortens kilowatt-hour consumption label (any endpoint)"
+    },
+    {
+      "name": "Air Temperature",
+      "pattern": "49-\\d+-Air_temperature$",
+      "replace": " - Air temperature$",
+      "with": " - Temp",
+      "description": "Shortens temperature sensor label (any endpoint)"
+    },
+    {
+      "name": "Illuminance",
+      "pattern": "49-\\d+-Illuminance$",
+      "replace": " - Illuminance$",
+      "with": " - Lux",
+      "description": "Shortens light sensor label (any endpoint)"
+    },
+    {
+      "name": "Motion Sensor",
+      "pattern": "113-\\d+-Home_Security-Motion_sensor_status$",
+      "replace": " - Motion sensor status$",
+      "with": " - Motion",
+      "description": "Shortens motion sensor label (any endpoint)"
+    },
+    {
+      "name": "Humidity Sensor",
+      "pattern": "49-\\d+-Humidity$",
+      "replace": " - Humidity$",
+      "with": " - RH%",
+      "description": "Shortens humidity sensor label (any endpoint)"
+    },
+    {
+      "name": "UV Index",
+      "pattern": "49-\\d+-Ultraviolet$",
+      "replace": " - Ultraviolet$",
+      "with": " - UV",
+      "description": "Shortens UV index sensor label (any endpoint)"
+    },
+    {
+      "name": "Battery Level",
+      "pattern": "128-\\d+-level$",
+      "replace": " - level$",
+      "with": " - Battery",
+      "description": "Shortens battery level label (any endpoint)"
+    },
+    {
+      "name": "Door/Window Sensor",
+      "pattern": "113-\\d+-Home_Security-Door_state$",
+      "replace": " - Door state$",
+      "with": " - Door",
+      "description": "Shortens door/window sensor label (any endpoint)"
+    },
+    {
+      "name": "Tamper Detection",
+      "pattern": "113-\\d+-Home_Security-Tampering_product_cover_removed$",
+      "replace": " - Tampering, product cover removed$",
+      "with": " - Tamper",
+      "description": "Shortens tamper detection label (any endpoint)"
+    }
+  ]
+}
