@@ -1,3 +1,17 @@
+# Script output files
 rename_log.txt
+rename_log-*.txt
 rename_summary.csv
+rename_summary-*.csv
+undo_rename-*.sql
+rename_report*.html
+
+# Database files
+*.db
+!domoticz.db.example
+
+# IDE
 .vscode/
+
+# Z-Wave JSON exports
+nodes_dump.json

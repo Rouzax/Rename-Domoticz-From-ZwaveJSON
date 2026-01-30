@@ -5,17 +5,17 @@
     "ENDPOINT PATTERN REFERENCE:",
     "  [01]     = endpoints 0 or 1 only (default - treats these as 'primary')",
     "  \\d+     = any endpoint (0, 1, 2, 3, ...)",
-    "  0        = endpoint 0 only",
-    "  1        = endpoint 1 only",
-    "  [012]    = endpoints 0, 1, or 2",
     "",
-    "EXAMPLE: If you want ALL endpoints to have suffix removed (risking collisions on multi-channel devices):",
-    "  Change: \"pattern\": \"37-[01]-currentValue$\"",
-    "  To:     \"pattern\": \"37-\\\\d+-currentValue$\"",
+    "SWITCHTYPE VALUES (only set for devices Domoticz creates incorrectly):",
+    "  2  = Contact          - For alert sensors (can't be UI-toggled)",
+    "  5  = Smoke Detector   - For smoke/heat alarms (adds Reset button)",
+    "  8  = Motion Sensor    - For legacy binary motion sensors",
     "",
-    "EXAMPLE: If you only want endpoint 0 devices renamed:",
-    "  Change: \"pattern\": \"37-[01]-currentValue$\"",
-    "  To:     \"pattern\": \"37-0-currentValue$\""
+    "CUSTOMIMAGE VALUES:",
+    "  13 = Alarm icon       - Used for alert sensors (Overcurrent, Overload, etc.)",
+    "",
+    "NOTE: Most devices (dimmers, switches, blinds, motion CC113, door contacts)",
+    "are created correctly by Domoticz and don't need switchType overrides."
   ],
   "rules": [
     {
@@ -23,91 +23,224 @@
       "pattern": "38-[01]-currentValue$",
       "replace": " - Current value$",
       "with": "",
-      "description": "Removes 'Current Value' suffix for dimmer/multilevel switch devices (endpoint 0 or 1)"
+      "description": "Removes 'Current Value' suffix for dimmer/multilevel switch devices. No switchType - CC38 is used for both dimmers AND blinds."
     },
     {
       "name": "Remove Current Value for Switch Binary",
       "pattern": "37-[01]-currentValue$",
       "replace": " - Current value$",
       "with": "",
-      "description": "Removes 'Current Value' suffix for binary switch devices (endpoint 0 or 1)"
+      "description": "Removes 'Current Value' suffix for binary switch devices."
     },
     {
       "name": "Electric Consumption Watts",
       "pattern": "50-\\d+-value-66049$",
       "replace": " - Electric Consumption \\[W\\]$",
       "with": " [W]",
-      "description": "Shortens wattage consumption label (any endpoint)"
+      "description": "Shortens wattage consumption label."
     },
     {
       "name": "Electric Consumption kWh",
       "pattern": "50-\\d+-value-65537$",
       "replace": " - Electric Consumption \\[kWh\\]$",
       "with": " [kWh]",
-      "description": "Shortens kilowatt-hour consumption label (any endpoint)"
+      "description": "Shortens kilowatt-hour consumption label."
     },
     {
       "name": "Air Temperature",
       "pattern": "49-\\d+-Air_temperature$",
       "replace": " - Air temperature$",
       "with": " - Temp",
-      "description": "Shortens temperature sensor label (any endpoint)"
+      "description": "Shortens temperature sensor label."
     },
     {
       "name": "Illuminance",
       "pattern": "49-\\d+-Illuminance$",
       "replace": " - Illuminance$",
       "with": " - Lux",
-      "description": "Shortens light sensor label (any endpoint)"
+      "description": "Shortens light sensor label."
     },
     {
       "name": "Motion Sensor",
       "pattern": "113-\\d+-Home_Security-Motion_sensor_status$",
       "replace": " - Motion sensor status$",
       "with": " - Motion",
-      "description": "Shortens motion sensor label (any endpoint)"
+      "description": "Shortens motion sensor label. No switchType - CC113 motion sensors are usually created correctly."
     },
     {
       "name": "Humidity Sensor",
       "pattern": "49-\\d+-Humidity$",
       "replace": " - Humidity$",
       "with": " - RH%",
-      "description": "Shortens humidity sensor label (any endpoint)"
+      "description": "Shortens humidity sensor label."
     },
     {
       "name": "UV Index",
       "pattern": "49-\\d+-Ultraviolet$",
       "replace": " - Ultraviolet$",
       "with": " - UV",
-      "description": "Shortens UV index sensor label (any endpoint)"
+      "description": "Shortens UV index sensor label."
     },
     {
       "name": "Battery Level",
       "pattern": "128-\\d+-level$",
       "replace": " - level$",
       "with": " - Battery",
-      "description": "Shortens battery level label (any endpoint)"
+      "description": "Shortens battery level label."
+    },
+    {
+      "name": "Battery Low Indicator",
+      "pattern": "128-\\d+-isLow$",
+      "replace": " - isLow$",
+      "with": " - Low Battery",
+      "switchType": 2,
+      "customImage": 13,
+      "description": "Renames battery low indicator. Sets Contact type (can't be toggled) with Alarm icon."
     },
     {
       "name": "Door/Window Sensor",
       "pattern": "113-\\d+-Home_Security-Door_state$",
       "replace": " - Door state$",
       "with": " - Door",
-      "description": "Shortens door/window sensor label (any endpoint)"
+      "description": "Shortens door/window sensor label. No switchType - usually created correctly."
     },
     {
       "name": "Tamper Detection",
       "pattern": "113-\\d+-Home_Security-Tampering_product_cover_removed$",
       "replace": " - Tampering, product cover removed$",
       "with": " - Tamper",
-      "description": "Shortens tamper detection label (any endpoint)"
+      "switchType": 2,
+      "customImage": 13,
+      "description": "Shortens tamper detection label. Sets Contact type (can't be toggled) with Alarm icon."
     },
     {
       "name": "Door/Window Sensor State",
       "pattern": "48-\\d+-Door-Window$",
       "replace": " - Sensor state \\(Door/Window\\)$",
       "with": " - Door",
-      "description": "Shortens door/window sensor state label (any endpoint)"
+      "description": "Shortens door/window sensor state label."
+    },
+    {
+      "name": "Smoke Alarm Sensor",
+      "pattern": "113-\\d+-Smoke_Alarm-Sensor_status$",
+      "replace": " - Sensor status$",
+      "with": " - Smoke Alarm",
+      "switchType": 5,
+      "description": "Renames smoke detection sensor. Sets Smoke Detector type with Reset button."
+    },
+    {
+      "name": "Smoke Alarm Test",
+      "pattern": "113-\\d+-Smoke_Alarm-Alarm_status$",
+      "replace": " - Alarm status$",
+      "with": " - Smoke Test",
+      "switchType": 5,
+      "description": "Renames smoke alarm test button sensor. Sets Smoke Detector type."
+    },
+    {
+      "name": "Heat Alarm Sensor",
+      "pattern": "113-\\d+-Heat_Alarm-Heat_sensor_status$",
+      "replace": " - Heat sensor status$",
+      "with": " - Heat Alarm",
+      "switchType": 5,
+      "description": "Renames heat detection sensor. Sets Smoke Detector type with Reset button."
+    },
+    {
+      "name": "Cover Status",
+      "pattern": "113-\\d+-Home_Security-Cover_status$",
+      "replace": " - Cover status$",
+      "with": " - Cover",
+      "switchType": 2,
+      "customImage": 13,
+      "description": "Renames tamper cover sensor. Sets Contact type (can't be toggled) with Alarm icon."
+    },
+    {
+      "name": "Battery Maintenance Status",
+      "pattern": "113-\\d+-Power_Management-Battery_maintenance_status$",
+      "replace": " - Battery maintenance status$",
+      "with": " - Battery Alert",
+      "switchType": 2,
+      "customImage": 13,
+      "description": "Shortens battery maintenance alert. Sets Contact type (can't be toggled) with Alarm icon."
+    },
+    {
+      "name": "Hardware Status",
+      "pattern": "113-\\d+-System-Hardware_status$",
+      "replace": " - Hardware status$",
+      "with": " - Hardware",
+      "switchType": 2,
+      "customImage": 13,
+      "description": "Renames hardware status. Sets Contact type (can't be toggled) with Alarm icon."
+    },
+    {
+      "name": "Smoke State (Alarm Sensor CC)",
+      "pattern": "156-\\d+-state-1$",
+      "replace": " - Smoke state$",
+      "with": " - Smoke",
+      "switchType": 5,
+      "description": "Renames Alarm Sensor CC smoke state. Sets Smoke Detector type with Reset button."
+    },
+    {
+      "name": "Motion Binary Sensor",
+      "pattern": "48-\\d+-Any$",
+      "replace": " - Sensor state \\(Any\\)$",
+      "with": " - Motion",
+      "switchType": 8,
+      "description": "Renames legacy binary motion sensor. Sets Motion Sensor type (often created wrong)."
+    },
+    {
+      "name": "Seismic Intensity",
+      "pattern": "49-\\d+-Seismic_Intensity$",
+      "replace": " - Seismic Intensity$",
+      "with": " - Seismic",
+      "description": "Shortens seismic intensity sensor label."
+    },
+    {
+      "name": "Acceleration X-axis",
+      "pattern": "49-\\d+-Acceleration_X-axis$",
+      "replace": " - Acceleration X-axis$",
+      "with": " - Accel X",
+      "description": "Shortens acceleration X-axis sensor label."
+    },
+    {
+      "name": "Acceleration Y-axis",
+      "pattern": "49-\\d+-Acceleration_Y-axis$",
+      "replace": " - Acceleration Y-axis$",
+      "with": " - Accel Y",
+      "description": "Shortens acceleration Y-axis sensor label."
+    },
+    {
+      "name": "Acceleration Z-axis",
+      "pattern": "49-\\d+-Acceleration_Z-axis$",
+      "replace": " - Acceleration Z-axis$",
+      "with": " - Accel Z",
+      "description": "Shortens acceleration Z-axis sensor label."
+    },
+    {
+      "name": "Overcurrent Status",
+      "pattern": "113-\\d+-Power_Management-Over-current_status$",
+      "replace": " - Over-current status$",
+      "with": " - Overcurrent",
+      "switchType": 2,
+      "customImage": 13,
+      "description": "Shortens overcurrent status. Sets Contact type (can't be toggled) with Alarm icon."
+    },
+    {
+      "name": "Overload Status",
+      "pattern": "113-\\d+-Power_Management-Over-load_status$",
+      "replace": " - Over-load status$",
+      "with": " - Overload",
+      "switchType": 2,
+      "customImage": 13,
+      "description": "Shortens overload status. Sets Contact type (can't be toggled) with Alarm icon."
+    },
+    {
+      "name": "Load Error Status",
+      "pattern": "113-\\d+-Power_Management-Load_error_status$",
+      "replace": " - Load error status$",
+      "with": " - Load Error",
+      "switchType": 2,
+      "customImage": 13,
+      "description": "Shortens load error status. Sets Contact type (can't be toggled) with Alarm icon."
     }
   ]
 }

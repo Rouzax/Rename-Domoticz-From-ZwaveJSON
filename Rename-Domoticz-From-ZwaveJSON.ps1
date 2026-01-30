@@ -5,13 +5,14 @@
 .DESCRIPTION
     Reads a JSON file containing Z-Wave device information, constructs a new name
     for each device (Location - DeviceName - Label), and updates the name in a
-    Domoticz SQLite database.
+    Domoticz SQLite database. Can also update SwitchType and CustomImage based on rules.
 
     Features:
       - Bulk-loads Domoticz DeviceStatus once for speed.
       - Performs all updates in a single transaction (atomic; rolls back on error).
       - Normalizes whitespace when comparing old vs new names.
       - Applies renaming rules to normalize common labels (configurable via JSON).
+      - Rules can optionally specify SwitchType and CustomImage to set correct device types.
       - Preserves a leading "$" in existing Domoticz names.
       - Skips updates when the existing name already matches the new name.
       - Records only true renames in a CSV summary.
@@ -35,15 +36,14 @@
     Default: <script folder>\rename_log.txt (falls back to <db folder>\rename_log.txt)
 
 .PARAMETER CsvFile
-    Path to save the renaming summary (only rows that actually changed).
-    Default: <script folder>\rename_summary.csv (falls back to <db folder>\rename_summary.csv)
+    Optional path to save the renaming summary CSV. Only generated when specified.
 
 .PARAMETER RulesFile
     Path to an optional JSON file containing custom renaming rules.
     If not provided, uses built-in default rules.
 
 .PARAMETER HtmlReport
-    Path to save an optional HTML report with visual summary.
+    Path to save the HTML report. Default: auto-generated in DB folder.
 
 .PARAMETER UndoFile
     Path to save the SQL undo script. Default: auto-generated in DB folder.
@@ -84,7 +84,7 @@
 
 .NOTES
     Author:  Rouzax
-    Version: 2.0
+    Version: 2.3
     Requires: PowerShell 7.0+ and PSSQLite module
     Encoding: Save as UTF-8 (no BOM) if you prefer that style.
 #>
@@ -110,7 +110,7 @@ param (
     [Parameter(HelpMessage = "Path to custom renaming rules JSON file")]
     [string]$RulesFile,
 
-    [Parameter(HelpMessage = "Path to save HTML report")]
+    [Parameter(HelpMessage = "Path to save HTML report (default: auto-generated in DB folder)")]
     [string]$HtmlReport,
 
     [Parameter(HelpMessage = "Path to save SQL undo script")]
@@ -154,12 +154,14 @@ $Script:NameCollisions = [System.Collections.Generic.List[PSCustomObject]]::new(
 
 # Statistics tracking
 $Script:Stats = @{
-    Renamed   = 0
-    Unchanged = 0
-    Missing   = 0
-    Errors    = 0
-    Excluded  = 0
-    Collisions = 0
+    Renamed      = 0
+    TypeChanged  = 0
+    ImageChanged = 0
+    Unchanged    = 0
+    Missing      = 0
+    Errors       = 0
+    Excluded     = 0
+    Collisions   = 0
 }
 
 # Timing for ETA calculation
@@ -372,13 +374,25 @@ function Import-RenamingRules {
         $rules = @()
 
         foreach ($rule in $content.rules) {
-            $rules += @{
+            $ruleObj = @{
                 Name        = $rule.name
                 Pattern     = $rule.pattern
                 Replace     = $rule.replace
                 With        = $rule.with
                 Description = $rule.description
             }
+
+            # Add optional switchType if present (check property exists first)
+            if ($rule.PSObject.Properties['switchType'] -and $null -ne $rule.switchType) {
+                $ruleObj.SwitchType = [int]$rule.switchType
+            }
+
+            # Add optional customImage if present (check property exists first)
+            if ($rule.PSObject.Properties['customImage'] -and $null -ne $rule.customImage) {
+                $ruleObj.CustomImage = [int]$rule.customImage
+            }
+
+            $rules += $ruleObj
         }
 
         Write-Log "Loaded $($rules.Count) custom renaming rules from: $Path" -Level INFO
@@ -394,6 +408,7 @@ function Get-TransformedDeviceName {
     <#
     .SYNOPSIS
         Applies renaming rules to transform a device name.
+        Returns the transformed name and any matched rule's switchType/customImage.
     #>
     [CmdletBinding()]
     param (
@@ -407,17 +422,37 @@ function Get-TransformedDeviceName {
         [array]$Rules
     )
 
+    $result = @{
+        Name        = $NewName
+        SwitchType  = $null
+        CustomImage = $null
+        RuleName    = $null
+    }
+
     foreach ($rule in $Rules) {
         if ($DeviceID -match $rule.Pattern) {
             $transformed = $NewName -replace $rule.Replace, $rule.With
             if ($transformed -ne $NewName) {
                 Write-Log "Applied rule '$($rule.Name)' to $DeviceID" -Level DEBUG
             }
-            return $transformed
+            $result.Name = $transformed
+            $result.RuleName = $rule.Name
+
+            # Capture SwitchType if defined in the rule
+            if ($rule.ContainsKey('SwitchType')) {
+                $result.SwitchType = $rule.SwitchType
+            }
+
+            # Capture CustomImage if defined in the rule
+            if ($rule.ContainsKey('CustomImage')) {
+                $result.CustomImage = $rule.CustomImage
+            }
+
+            return $result
         }
     }
 
-    return $NewName
+    return $result
 }
 
 function Test-DeviceExcluded {
@@ -571,13 +606,15 @@ function Write-ColoredBox {
 
         # Color code based on key
         $valueColor = switch -Regex ($key) {
-            'Renamed'   { 'Green' }
-            'Unchanged' { 'Yellow' }
-            'Missing'   { 'DarkGray' }
-            'Errors'    { if ($value -gt 0) { 'Red' } else { 'Green' } }
-            'Excluded'  { 'DarkYellow' }
-            'Collisions' { if ($value -gt 0) { 'Red' } else { 'Green' } }
-            default     { 'White' }
+            'Renamed'      { 'Green' }
+            'TypeChanged'  { 'Cyan' }
+            'ImageChanged' { 'Magenta' }
+            'Unchanged'    { 'Yellow' }
+            'Missing'      { 'DarkGray' }
+            'Errors'       { if ($value -gt 0) { 'Red' } else { 'Green' } }
+            'Excluded'     { 'DarkYellow' }
+            'Collisions'   { if ($value -gt 0) { 'Red' } else { 'Green' } }
+            default        { 'White' }
         }
 
         Write-Host $linePadded -NoNewline -ForegroundColor $valueColor
@@ -591,7 +628,7 @@ function Write-ColoredBox {
 function New-HtmlReport {
     <#
     .SYNOPSIS
-        Generates an HTML report of the renaming operation.
+        Generates an HTML report of the renaming operation with improved readability.
     #>
     [CmdletBinding()]
     param (
@@ -614,55 +651,200 @@ function New-HtmlReport {
         [bool]$WasDryRun
     )
 
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $mode = if ($WasDryRun) { "DRY RUN (No changes made)" } else { "LIVE" }
-    $modeClass = if ($WasDryRun) { "warning" } else { "success" }
+    # SwitchType descriptions for human-readable output
+    $switchTypeNames = @{
+        0  = "On/Off"
+        1  = "Doorbell"
+        2  = "Contact"
+        3  = "Blinds"
+        4  = "X10 Siren"
+        5  = "Smoke Detector"
+        6  = "Blinds Inverted"
+        7  = "Dimmer"
+        8  = "Motion Sensor"
+        9  = "Push On Button"
+        10 = "Push Off Button"
+        11 = "Door Contact"
+        12 = "Dusk Sensor"
+        13 = "Blinds Percentage"
+        14 = "Venetian Blinds US"
+        15 = "Venetian Blinds EU"
+        16 = "Blinds Percentage Inverted"
+        17 = "Media Player"
+        18 = "Selector"
+        19 = "Door Lock"
+        20 = "Door Lock Inverted"
+    }
 
-    $renameTableRows = ""
+    # CustomImage descriptions
+    $customImageNames = @{
+        0  = "Default"
+        1  = "Light"
+        2  = "Fan"
+        9  = "Computer"
+        10 = "Phone"
+        13 = "Alarm"
+        17 = "Speaker"
+    }
+
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $mode = if ($WasDryRun) { "Dry Run" } else { "Live" }
+    $modeClass = if ($WasDryRun) { "warning" } else { "success" }
+    $modeIcon = if ($WasDryRun) { "⚡" } else { "✓" }
+
+    # Helper function to extract friendly name (location + device) from full name
+    function Get-FriendlyName {
+        param([string]$FullName)
+        # Remove leading $ if present, then extract everything before the last " - "
+        $cleanName = $FullName.TrimStart('$')
+        $lastDash = $cleanName.LastIndexOf(' - ')
+        if ($lastDash -gt 0) {
+            return $cleanName.Substring(0, $lastDash)
+        }
+        return $cleanName
+    }
+
+    # Helper function to extract just the suffix that changed
+    function Get-NameSuffix {
+        param([string]$FullName)
+        $cleanName = $FullName.TrimStart('$')
+        $lastDash = $cleanName.LastIndexOf(' - ')
+        if ($lastDash -gt 0 -and $lastDash -lt $cleanName.Length - 3) {
+            return $cleanName.Substring($lastDash + 3)
+        }
+        return $cleanName
+    }
+
+    # Build device items HTML
+    $deviceItemsHtml = ""
     if ($RenameList -and $RenameList.Count -gt 0) {
         foreach ($item in $RenameList) {
-            $renameTableRows += @"
-            <tr>
-                <td><code>$([System.Web.HttpUtility]::HtmlEncode($item.DeviceID))</code></td>
-                <td>$([System.Web.HttpUtility]::HtmlEncode($item.OldName))</td>
-                <td>$([System.Web.HttpUtility]::HtmlEncode($item.NewName))</td>
-            </tr>
+            $deviceId = [System.Web.HttpUtility]::HtmlEncode($item.DeviceID)
+            $friendlyName = [System.Web.HttpUtility]::HtmlEncode((Get-FriendlyName $item.NewName))
+            $newSuffix = [System.Web.HttpUtility]::HtmlEncode((Get-NameSuffix $item.NewName))
+
+            # Build data-changes attribute for filtering
+            $changeTypes = @()
+            if ($item.NameChanged) { $changeTypes += "name" }
+            if ($item.SwitchTypeChanged) { $changeTypes += "switchtype" }
+            if ($item.CustomImageChanged) { $changeTypes += "customimage" }
+            $dataChanges = $changeTypes -join " "
+
+            # Build badges for header
+            $badges = ""
+            if ($item.NameChanged) {
+                $badges += '<span class="change-badge name">Name</span>'
+            }
+            if ($item.SwitchTypeChanged) {
+                $badges += "<span class=""change-badge switchtype"">Type → $($item.NewSwitchType)</span>"
+            }
+            if ($item.CustomImageChanged) {
+                $badges += "<span class=""change-badge customimage"">Image → $($item.NewCustomImage)</span>"
+            }
+
+            # Build detail sections
+            $details = ""
+            if ($item.NameChanged) {
+                $oldSuffix = [System.Web.HttpUtility]::HtmlEncode((Get-NameSuffix $item.OldName))
+                $newSuffix = [System.Web.HttpUtility]::HtmlEncode((Get-NameSuffix $item.NewName))
+                $details += @"
+                    <div class="change-detail">
+                        <div class="change-label">Name</div>
+                        <div class="change-values">
+                            <span class="old-value">$oldSuffix</span>
+                            <span class="arrow">→</span>
+                            <span class="new-value">$newSuffix</span>
+                        </div>
+                    </div>
+"@
+            }
+            if ($item.SwitchTypeChanged) {
+                $oldTypeName = if ($switchTypeNames.ContainsKey([int]$item.OldSwitchType)) { $switchTypeNames[[int]$item.OldSwitchType] } else { "Unknown" }
+                $newTypeName = if ($switchTypeNames.ContainsKey([int]$item.NewSwitchType)) { $switchTypeNames[[int]$item.NewSwitchType] } else { "Unknown" }
+                $details += @"
+                    <div class="change-detail">
+                        <div class="change-label">SwitchType</div>
+                        <div class="change-values">
+                            <span class="old-value">$($item.OldSwitchType) ($oldTypeName)</span>
+                            <span class="arrow">→</span>
+                            <span class="new-value">$($item.NewSwitchType) ($newTypeName)</span>
+                        </div>
+                    </div>
+"@
+            }
+            if ($item.CustomImageChanged) {
+                $oldImgName = if ($customImageNames.ContainsKey([int]$item.OldCustomImage)) { $customImageNames[[int]$item.OldCustomImage] } else { "Custom" }
+                $newImgName = if ($customImageNames.ContainsKey([int]$item.NewCustomImage)) { $customImageNames[[int]$item.NewCustomImage] } else { "Custom" }
+                $details += @"
+                    <div class="change-detail">
+                        <div class="change-label">CustomImage</div>
+                        <div class="change-values">
+                            <span class="old-value">$($item.OldCustomImage) ($oldImgName)</span>
+                            <span class="arrow">→</span>
+                            <span class="new-value">$($item.NewCustomImage) ($newImgName)</span>
+                        </div>
+                    </div>
+"@
+            }
+
+            $deviceItemsHtml += @"
+            <div class="device-item" data-changes="$dataChanges">
+                <div class="device-header" onclick="toggleDevice(this)">
+                    <span class="expand-icon">▶</span>
+                    <div class="device-name">
+                        <div class="friendly-name">$friendlyName <span class="name-suffix">› $newSuffix</span></div>
+                        <div class="device-id">$deviceId</div>
+                    </div>
+                    <div class="changes">
+                        $badges
+                    </div>
+                </div>
+                <div class="device-details">
+$details
+                </div>
+            </div>
 "@
         }
     }
     else {
-        $renameTableRows = "<tr><td colspan='3' class='no-data'>No devices were renamed</td></tr>"
+        $deviceItemsHtml = '<div class="no-data">No devices were updated</div>'
     }
 
+    # Build collision section
     $collisionSection = ""
     if ($Collisions -and $Collisions.Count -gt 0) {
-        $collisionRows = ""
+        $collisionItems = ""
         foreach ($collision in $Collisions) {
-            $collisionRows += @"
-            <tr>
-                <td>$([System.Web.HttpUtility]::HtmlEncode($collision.NewName))</td>
-                <td><code>$([System.Web.HttpUtility]::HtmlEncode($collision.DeviceID1))</code></td>
-                <td><code>$([System.Web.HttpUtility]::HtmlEncode($collision.DeviceID2))</code></td>
-            </tr>
+            $collisionItems += @"
+            <div class="collision-item">
+                <div class="collision-name">$([System.Web.HttpUtility]::HtmlEncode($collision.NewName))</div>
+                <div class="collision-ids">
+                    <code>$([System.Web.HttpUtility]::HtmlEncode($collision.DeviceID1))</code>
+                    <code>$([System.Web.HttpUtility]::HtmlEncode($collision.DeviceID2))</code>
+                </div>
+            </div>
 "@
         }
 
         $collisionSection = @"
-        <h2>⚠️ Name Collisions Detected</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>New Name</th>
-                    <th>Device ID 1</th>
-                    <th>Device ID 2</th>
-                </tr>
-            </thead>
-            <tbody>
-                $collisionRows
-            </tbody>
-        </table>
+        <h2>⚠️ Name Collisions Detected <span class="count">($($Collisions.Count) collisions)</span></h2>
+        <div class="collision-list">
+            $collisionItems
+        </div>
 "@
     }
+
+    # Build backup info section
+    $backupSection = ""
+    if ($BackupPath) {
+        $backupSection = @"
+        <div class="backup-info">
+            📁 <strong>Backup:</strong> <code>$([System.Web.HttpUtility]::HtmlEncode($BackupPath))</code>
+        </div>
+"@
+    }
+
+    $deviceCount = if ($RenameList) { $RenameList.Count } else { 0 }
 
     $html = @"
 <!DOCTYPE html>
@@ -673,144 +855,402 @@ function New-HtmlReport {
     <title>Domoticz Device Rename Report</title>
     <style>
         :root {
-            --bg-primary: #1a1a2e;
-            --bg-secondary: #16213e;
-            --bg-card: #0f3460;
-            --text-primary: #eaeaea;
-            --text-secondary: #a0a0a0;
+            --bg-primary: #0f0f17;
+            --bg-secondary: #1a1a28;
+            --bg-card: #242438;
+            --bg-hover: #2d2d45;
+            --text-primary: #f0f0f5;
+            --text-secondary: #8888a0;
+            --text-muted: #5a5a70;
             --accent: #e94560;
             --success: #4ecca3;
-            --warning: #ffc107;
-            --error: #dc3545;
+            --warning: #ffc857;
+            --error: #ff6b6b;
+            --info: #64b5f6;
+            --purple: #b388ff;
+            --border: #3a3a50;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: 'Segoe UI', system-ui, sans-serif;
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
             background: var(--bg-primary);
             color: var(--text-primary);
             line-height: 1.6;
             padding: 2rem;
+            font-size: 14px;
         }
-        .container { max-width: 1200px; margin: 0 auto; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        
+        header {
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
         h1 {
-            color: var(--accent);
-            margin-bottom: 0.5rem;
-            font-size: 2rem;
-        }
-        h2 {
             color: var(--text-primary);
-            margin: 2rem 0 1rem;
-            padding-bottom: 0.5rem;
-            border-bottom: 2px solid var(--accent);
+            margin-bottom: 0.5rem;
+            font-size: 1.75rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
         }
+        h1 .icon { font-size: 1.5rem; }
         .meta {
             color: var(--text-secondary);
-            margin-bottom: 2rem;
+            font-size: 0.875rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
         }
         .mode-badge {
-            display: inline-block;
-            padding: 0.25rem 0.75rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.375rem;
+            padding: 0.25rem 0.625rem;
             border-radius: 4px;
-            font-weight: bold;
-            margin-left: 1rem;
+            font-weight: 600;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
-        .mode-badge.warning { background: var(--warning); color: #000; }
-        .mode-badge.success { background: var(--success); color: #000; }
+        .mode-badge.warning { background: var(--warning); color: #1a1a28; }
+        .mode-badge.success { background: var(--success); color: #1a1a28; }
+        
+        h2 {
+            color: var(--text-primary);
+            margin: 2.5rem 0 1rem;
+            font-size: 1.125rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        h2 .count {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+        
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 1rem;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 0.75rem;
             margin-bottom: 2rem;
         }
         .stat-card {
-            background: var(--bg-card);
-            padding: 1.5rem;
+            background: var(--bg-secondary);
+            padding: 1rem 1.25rem;
             border-radius: 8px;
+            border: 1px solid var(--border);
             text-align: center;
         }
         .stat-card .value {
-            font-size: 2.5rem;
-            font-weight: bold;
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1.2;
         }
         .stat-card .label {
             color: var(--text-secondary);
             text-transform: uppercase;
-            font-size: 0.8rem;
-            letter-spacing: 1px;
+            font-size: 0.65rem;
+            letter-spacing: 0.75px;
+            margin-top: 0.25rem;
         }
         .stat-card.renamed .value { color: var(--success); }
+        .stat-card.type-changed .value { color: var(--info); }
+        .stat-card.image-changed .value { color: var(--purple); }
         .stat-card.unchanged .value { color: var(--warning); }
-        .stat-card.missing .value { color: var(--text-secondary); }
+        .stat-card.missing .value { color: var(--text-muted); }
         .stat-card.errors .value { color: var(--error); }
-        .stat-card.excluded .value { color: #9b59b6; }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 2rem;
+        .stat-card.excluded .value { color: var(--purple); }
+        
+        .device-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .device-item {
             background: var(--bg-secondary);
+            border: 1px solid var(--border);
             border-radius: 8px;
             overflow: hidden;
+            transition: border-color 0.15s;
         }
-        th, td {
-            padding: 0.75rem 1rem;
-            text-align: left;
-            border-bottom: 1px solid var(--bg-card);
+        .device-item:hover {
+            border-color: var(--accent);
         }
-        th {
-            background: var(--bg-card);
+        .device-header {
+            padding: 0.875rem 1rem;
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+            cursor: pointer;
+        }
+        .device-header:hover {
+            background: var(--bg-hover);
+        }
+        .device-name {
+            flex: 1;
+            min-width: 0;
+        }
+        .device-name .friendly-name {
             font-weight: 600;
-            text-transform: uppercase;
-            font-size: 0.8rem;
-            letter-spacing: 1px;
+            color: var(--text-primary);
+            font-size: 0.9375rem;
+            word-break: break-word;
         }
-        tr:hover { background: rgba(233, 69, 96, 0.1); }
-        code {
+        .device-name .friendly-name .name-suffix {
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        .device-name .device-id {
+            font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+            word-break: break-all;
+        }
+        
+        .changes {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            align-items: flex-start;
+        }
+        .change-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.375rem;
+            padding: 0.375rem 0.625rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .change-badge.name {
+            background: rgba(78, 204, 163, 0.15);
+            color: var(--success);
+            border: 1px solid rgba(78, 204, 163, 0.3);
+        }
+        .change-badge.switchtype {
+            background: rgba(100, 181, 246, 0.15);
+            color: var(--info);
+            border: 1px solid rgba(100, 181, 246, 0.3);
+        }
+        .change-badge.customimage {
+            background: rgba(179, 136, 255, 0.15);
+            color: var(--purple);
+            border: 1px solid rgba(179, 136, 255, 0.3);
+        }
+        
+        .device-details {
+            display: none;
+            padding: 1rem;
+            padding-top: 0;
+            border-top: 1px solid var(--border);
             background: var(--bg-card);
-            padding: 0.2rem 0.4rem;
-            border-radius: 4px;
-            font-size: 0.9em;
         }
+        .device-item.expanded .device-details {
+            display: block;
+        }
+        .device-item.expanded .device-header {
+            background: var(--bg-hover);
+        }
+        .change-detail {
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .change-detail:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+        .change-detail:first-child {
+            padding-top: 0.5rem;
+        }
+        .change-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 0.375rem;
+            font-weight: 600;
+        }
+        .change-values {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        .old-value {
+            color: var(--text-secondary);
+            text-decoration: line-through;
+            opacity: 0.7;
+        }
+        .arrow {
+            color: var(--accent);
+            font-weight: bold;
+        }
+        .new-value {
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+        
+        .expand-icon {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            transition: transform 0.2s;
+            flex-shrink: 0;
+        }
+        .device-item.expanded .expand-icon {
+            transform: rotate(90deg);
+        }
+        
+        .toolbar {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .search-box {
+            flex: 1;
+            min-width: 200px;
+            max-width: 400px;
+        }
+        .search-box input {
+            width: 100%;
+            padding: 0.625rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-size: 0.875rem;
+        }
+        .search-box input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .search-box input::placeholder {
+            color: var(--text-muted);
+        }
+        .filter-buttons {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        .filter-btn {
+            padding: 0.5rem 0.875rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .filter-btn:hover {
+            border-color: var(--text-secondary);
+            color: var(--text-primary);
+        }
+        .filter-btn.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }
+        
+        .collision-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            margin-bottom: 2rem;
+        }
+        .collision-item {
+            background: var(--bg-secondary);
+            border: 1px solid var(--error);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+        .collision-name {
+            font-weight: 600;
+            color: var(--error);
+            margin-bottom: 0.5rem;
+        }
+        .collision-ids {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+        .collision-ids code {
+            font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+        
+        footer {
+            margin-top: 3rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+        
         .no-data {
             text-align: center;
             color: var(--text-secondary);
             font-style: italic;
+            padding: 2rem;
         }
         .backup-info {
-            background: var(--bg-card);
-            padding: 1rem;
-            border-radius: 8px;
-            margin-bottom: 2rem;
+            background: var(--bg-secondary);
+            padding: 0.875rem 1rem;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            margin-bottom: 1.5rem;
+            font-size: 0.875rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
         }
         .backup-info code {
             color: var(--success);
+            font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+            font-size: 0.8rem;
         }
-        footer {
-            margin-top: 3rem;
-            padding-top: 1rem;
-            border-top: 1px solid var(--bg-card);
-            color: var(--text-secondary);
-            font-size: 0.9rem;
+        
+        @media (max-width: 640px) {
+            body { padding: 1rem; }
+            .device-header { flex-direction: column; gap: 0.75rem; }
+            .changes { width: 100%; }
+            .stats-grid { grid-template-columns: repeat(3, 1fr); }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🏠 Domoticz Device Rename Report</h1>
-        <p class="meta">
-            Generated: $timestamp
-            <span class="mode-badge $modeClass">$mode</span>
-        </p>
+        <header>
+            <h1><span class="icon">🏠</span> Domoticz Device Rename Report</h1>
+            <p class="meta">
+                <span>Generated: $timestamp</span>
+                <span class="mode-badge $modeClass">$modeIcon $mode</span>
+            </p>
+        </header>
 
-        $(if ($BackupPath) { @"
-        <div class="backup-info">
-            📁 <strong>Backup:</strong> <code>$BackupPath</code>
-        </div>
-"@ })
+        $backupSection
 
         <div class="stats-grid">
             <div class="stat-card renamed">
                 <div class="value">$($Stats.Renamed)</div>
                 <div class="label">Renamed</div>
+            </div>
+            <div class="stat-card type-changed">
+                <div class="value">$($Stats.TypeChanged)</div>
+                <div class="label">Type Changed</div>
+            </div>
+            <div class="stat-card image-changed">
+                <div class="value">$($Stats.ImageChanged)</div>
+                <div class="label">Image Changed</div>
             </div>
             <div class="stat-card unchanged">
                 <div class="value">$($Stats.Unchanged)</div>
@@ -832,24 +1272,72 @@ function New-HtmlReport {
 
         $collisionSection
 
-        <h2>📝 Renamed Devices</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Device ID</th>
-                    <th>Old Name</th>
-                    <th>New Name</th>
-                </tr>
-            </thead>
-            <tbody>
-                $renameTableRows
-            </tbody>
-        </table>
+        <h2>📝 Updated Devices <span class="count">($deviceCount devices)</span></h2>
+        
+        <div class="toolbar">
+            <div class="search-box">
+                <input type="text" id="search" placeholder="Filter devices..." autocomplete="off">
+            </div>
+            <div class="filter-buttons">
+                <button class="filter-btn active" data-filter="all">All</button>
+                <button class="filter-btn" data-filter="name">Name</button>
+                <button class="filter-btn" data-filter="switchtype">SwitchType</button>
+                <button class="filter-btn" data-filter="customimage">CustomImage</button>
+            </div>
+        </div>
+
+        <div class="device-list" id="deviceList">
+$deviceItemsHtml
+        </div>
 
         <footer>
-            Generated by Rename-Domoticz-From-ZwaveJSON.ps1 v2.0
+            Generated by Rename-Domoticz-From-ZwaveJSON.ps1 v2.3
         </footer>
     </div>
+
+    <script>
+        function toggleDevice(header) {
+            header.closest('.device-item').classList.toggle('expanded');
+        }
+
+        document.getElementById('search').addEventListener('input', function(e) {
+            const query = e.target.value.toLowerCase();
+            document.querySelectorAll('.device-item').forEach(item => {
+                const text = item.textContent.toLowerCase();
+                item.style.display = text.includes(query) ? '' : 'none';
+            });
+        });
+
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const filter = this.dataset.filter;
+                
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+
+                document.querySelectorAll('.device-item').forEach(item => {
+                    if (filter === 'all') {
+                        item.style.display = '';
+                    } else {
+                        const changes = item.dataset.changes || '';
+                        item.style.display = changes.includes(filter) ? '' : 'none';
+                    }
+                });
+            });
+        });
+
+        document.querySelector('h2').addEventListener('dblclick', function() {
+            const items = document.querySelectorAll('.device-item');
+            const allExpanded = [...items].every(i => i.classList.contains('expanded'));
+            items.forEach(item => {
+                if (allExpanded) {
+                    item.classList.remove('expanded');
+                } else {
+                    item.classList.add('expanded');
+                }
+            });
+        });
+    </script>
 </body>
 </html>
 "@
@@ -866,7 +1354,7 @@ $Script:Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 Write-Host ""
 Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║     Domoticz Device Renamer from Z-Wave JSON Export v2.0     ║" -ForegroundColor Cyan
+Write-Host "║     Domoticz Device Renamer from Z-Wave JSON Export v2.3     ║" -ForegroundColor Cyan
 Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
 
@@ -1000,13 +1488,17 @@ catch {
     exit $Script:ExitCodes.Error
 }
 
-# Bulk-read DeviceStatus
+# Bulk-read DeviceStatus (including SwitchType and CustomImage)
 $allDevices = @{}
 try {
     Write-Host "  Loading device data from database..." -ForegroundColor Gray
-    $rows = Invoke-SqliteQuery -Query "SELECT DeviceID, Name FROM DeviceStatus" -SQLiteConnection $DbConn
+    $rows = Invoke-SqliteQuery -Query "SELECT DeviceID, Name, SwitchType, CustomImage FROM DeviceStatus" -SQLiteConnection $DbConn
     foreach ($r in $rows) {
-        $allDevices[[string]$r.DeviceID] = [string]$r.Name
+        $allDevices[[string]$r.DeviceID] = @{
+            Name        = [string]$r.Name
+            SwitchType  = [int]$r.SwitchType
+            CustomImage = [int]$r.CustomImage
+        }
     }
     Write-Log "Loaded $($allDevices.Count) DeviceStatus rows into memory" -Level SUCCESS
     Write-Host "  ✓ Loaded $($allDevices.Count) devices from database" -ForegroundColor Green
@@ -1138,15 +1630,24 @@ foreach ($Device in $ZwaveData) {
         $parts = @($Location, $DeviceName, $Label) | Where-Object { $_ -and $_.Trim() -ne "" }
         $NewName = ($parts -join " - ").Trim()
         $NewName = $NewName -replace '\s{2,}', ' '
-        $NewName = Get-TransformedDeviceName -DeviceID $DeviceID -NewName $NewName -Rules $RenamingRules
+
+        # Get transformed name and any switchType/customImage from matched rule
+        $transformResult = Get-TransformedDeviceName -DeviceID $DeviceID -NewName $NewName -Rules $RenamingRules
+        $NewName = $transformResult.Name
+        $NewSwitchType = $transformResult.SwitchType
+        $NewCustomImage = $transformResult.CustomImage
 
         # Check if device exists
-        $OldName = $allDevices[$DeviceID]
-        if ($null -eq $OldName) {
+        $deviceData = $allDevices[$DeviceID]
+        if ($null -eq $deviceData) {
             Write-Log "MISSING: DeviceID not found in Domoticz: $DeviceID" -Level DEBUG
             $Script:Stats.Missing++
             continue
         }
+
+        $OldName = $deviceData.Name
+        $OldSwitchType = $deviceData.SwitchType
+        $OldCustomImage = $deviceData.CustomImage
 
         # Preserve "$" prefix
         if ($OldName -match '^\$' -and $NewName -notmatch '^\$') {
@@ -1157,38 +1658,70 @@ foreach ($Device in $ZwaveData) {
         $OldNameNorm = ($OldName -replace '\s{2,}', ' ').Trim()
         $NewNameNorm = ($NewName -replace '\s{2,}', ' ').Trim()
 
-        if ($OldNameNorm -eq $NewNameNorm) {
-            Write-Log "UNCHANGED: $DeviceID | Name remains '$OldNameNorm'" -Level DEBUG
+        # Check what needs to change
+        $nameChanged = ($OldNameNorm -ne $NewNameNorm)
+        $switchTypeChanged = ($null -ne $NewSwitchType -and $OldSwitchType -ne $NewSwitchType)
+        $customImageChanged = ($null -ne $NewCustomImage -and $OldCustomImage -ne $NewCustomImage)
+
+        # Skip if nothing changed
+        if (-not $nameChanged -and -not $switchTypeChanged -and -not $customImageChanged) {
+            Write-Log "UNCHANGED: $DeviceID | No changes needed" -Level DEBUG
             $Script:Stats.Unchanged++
             continue
         }
 
-        # Check for name collision
-        if ($proposedNames.ContainsKey($NewNameNorm)) {
-            $existingDeviceId = $proposedNames[$NewNameNorm]
-            $Script:NameCollisions.Add([PSCustomObject]@{
-                NewName   = $NewNameNorm
-                DeviceID1 = $existingDeviceId
-                DeviceID2 = $DeviceID
-            })
-            $Script:Stats.Collisions++
-            Write-Log "COLLISION: '$NewNameNorm' would be assigned to both $existingDeviceId and $DeviceID" -Level WARNING
+        # Check for name collision (only if name is changing)
+        if ($nameChanged) {
+            if ($proposedNames.ContainsKey($NewNameNorm)) {
+                $existingDeviceId = $proposedNames[$NewNameNorm]
+                $Script:NameCollisions.Add([PSCustomObject]@{
+                    NewName   = $NewNameNorm
+                    DeviceID1 = $existingDeviceId
+                    DeviceID2 = $DeviceID
+                })
+                $Script:Stats.Collisions++
+                Write-Log "COLLISION: '$NewNameNorm' would be assigned to both $existingDeviceId and $DeviceID" -Level WARNING
+            }
+            else {
+                $proposedNames[$NewNameNorm] = $DeviceID
+            }
         }
-        else {
-            $proposedNames[$NewNameNorm] = $DeviceID
-        }
+
+        # Build change description for logging
+        $changes = @()
+        if ($nameChanged) { $changes += "Name" }
+        if ($switchTypeChanged) { $changes += "SwitchType($OldSwitchType->$NewSwitchType)" }
+        if ($customImageChanged) { $changes += "CustomImage($OldCustomImage->$NewCustomImage)" }
+        Write-Log "CHANGE: $DeviceID | $($changes -join ', ')" -Level DEBUG
 
         # Add to rename list
         $Script:RenameList.Add([PSCustomObject]@{
-            DeviceID = $DeviceID
-            OldName  = $OldName
-            NewName  = $NewName
+            DeviceID          = $DeviceID
+            OldName           = $OldName
+            NewName           = if ($nameChanged) { $NewName } else { $null }
+            OldSwitchType     = $OldSwitchType
+            NewSwitchType     = if ($switchTypeChanged) { $NewSwitchType } else { $null }
+            OldCustomImage    = $OldCustomImage
+            NewCustomImage    = if ($customImageChanged) { $NewCustomImage } else { $null }
+            NameChanged       = $nameChanged
+            SwitchTypeChanged = $switchTypeChanged
+            CustomImageChanged = $customImageChanged
         })
 
-        # Generate undo statement
-        $escapedOldName = ConvertTo-SqlLiteral -Value $OldName
+        # Generate undo statement (only include fields that changed)
+        $undoParts = @()
+        if ($nameChanged) {
+            $escapedOldName = ConvertTo-SqlLiteral -Value $OldName
+            $undoParts += "Name = $escapedOldName"
+        }
+        if ($switchTypeChanged) {
+            $undoParts += "SwitchType = $OldSwitchType"
+        }
+        if ($customImageChanged) {
+            $undoParts += "CustomImage = $OldCustomImage"
+        }
         $escapedDeviceId = ConvertTo-SqlLiteral -Value $DeviceID
-        $Script:UndoStatements.Add("UPDATE DeviceStatus SET Name = $escapedOldName WHERE DeviceID = $escapedDeviceId;")
+        $Script:UndoStatements.Add("UPDATE DeviceStatus SET $($undoParts -join ', ') WHERE DeviceID = $escapedDeviceId;")
     }
 }
 
@@ -1246,7 +1779,7 @@ if ($Script:NameCollisions.Count -gt 0) {
 
 # Phase 2: Apply changes
 if ($Script:RenameList.Count -eq 0) {
-    Write-Host "  ℹ️  No devices need to be renamed." -ForegroundColor Yellow
+    Write-Host "  ℹ️  No devices need to be updated." -ForegroundColor Yellow
 }
 else {
     Write-Host "  Phase 2: " -NoNewline -ForegroundColor Cyan
@@ -1276,19 +1809,51 @@ else {
                 Write-ProgressWithEta -Current $updateIdx -Total $Script:RenameList.Count -Stopwatch $updateStopwatch -Activity "Updating devices"
             }
 
-            Write-Log "RENAMING: $($item.DeviceID) | Old: '$($item.OldName)' -> New: '$($item.NewName)'" -Level INFO
+            # Build change description
+            $changes = @()
+            if ($item.NameChanged) { $changes += "Name: '$($item.OldName)' -> '$($item.NewName)'" }
+            if ($item.SwitchTypeChanged) { $changes += "SwitchType: $($item.OldSwitchType) -> $($item.NewSwitchType)" }
+            if ($item.CustomImageChanged) { $changes += "CustomImage: $($item.OldCustomImage) -> $($item.NewCustomImage)" }
+
+            Write-Log "UPDATING: $($item.DeviceID) | $($changes -join '; ')" -Level INFO
 
             if (-not $DryRun) {
                 try {
-                    Invoke-SqliteQuery -Query @"
-UPDATE DeviceStatus
-SET Name = @NewName
-WHERE DeviceID = @DeviceID AND Name <> @NewName
-"@ -SQLiteConnection $DbConn -SqlParameters @{ NewName = $item.NewName; DeviceID = $item.DeviceID }
+                    # Build dynamic SET clause
+                    $setParts = @()
+                    $sqlParams = @{ DeviceID = $item.DeviceID }
 
-                    $allDevices[$item.DeviceID] = $item.NewName
-                    Write-Log "SUCCESS: Updated $($item.DeviceID) to '$($item.NewName)'" -Level SUCCESS
-                    $Script:Stats.Renamed++
+                    if ($item.NameChanged) {
+                        $setParts += "Name = @NewName"
+                        $sqlParams.NewName = $item.NewName
+                    }
+                    if ($item.SwitchTypeChanged) {
+                        $setParts += "SwitchType = @NewSwitchType"
+                        $sqlParams.NewSwitchType = $item.NewSwitchType
+                    }
+                    if ($item.CustomImageChanged) {
+                        $setParts += "CustomImage = @NewCustomImage"
+                        $sqlParams.NewCustomImage = $item.NewCustomImage
+                    }
+
+                    $updateQuery = "UPDATE DeviceStatus SET $($setParts -join ', ') WHERE DeviceID = @DeviceID"
+                    Invoke-SqliteQuery -Query $updateQuery -SQLiteConnection $DbConn -SqlParameters $sqlParams
+
+                    # Update cached data
+                    if ($item.NameChanged) {
+                        $allDevices[$item.DeviceID].Name = $item.NewName
+                        $Script:Stats.Renamed++
+                    }
+                    if ($item.SwitchTypeChanged) {
+                        $allDevices[$item.DeviceID].SwitchType = $item.NewSwitchType
+                        $Script:Stats.TypeChanged++
+                    }
+                    if ($item.CustomImageChanged) {
+                        $allDevices[$item.DeviceID].CustomImage = $item.NewCustomImage
+                        $Script:Stats.ImageChanged++
+                    }
+
+                    Write-Log "SUCCESS: Updated $($item.DeviceID)" -Level SUCCESS
                 }
                 catch {
                     Write-Log "ERROR: Failed to update $($item.DeviceID): $_" -Level ERROR
@@ -1298,8 +1863,10 @@ WHERE DeviceID = @DeviceID AND Name <> @NewName
                 }
             }
             else {
-                Write-Log "DRY-RUN: Would update $($item.DeviceID) to '$($item.NewName)'" -Level INFO
-                $Script:Stats.Renamed++
+                Write-Log "DRY-RUN: Would update $($item.DeviceID)" -Level INFO
+                if ($item.NameChanged) { $Script:Stats.Renamed++ }
+                if ($item.SwitchTypeChanged) { $Script:Stats.TypeChanged++ }
+                if ($item.CustomImageChanged) { $Script:Stats.ImageChanged++ }
             }
         }
 
@@ -1342,7 +1909,7 @@ if ($DbConn) {
 Write-Host ""
 
 # Add final summary to log
-Write-Log "Summary: Renamed=$($Script:Stats.Renamed); Unchanged=$($Script:Stats.Unchanged); Missing=$($Script:Stats.Missing); Excluded=$($Script:Stats.Excluded); Collisions=$($Script:Stats.Collisions); Errors=$($Script:Stats.Errors)" -Level INFO
+Write-Log "Summary: Renamed=$($Script:Stats.Renamed); TypeChanged=$($Script:Stats.TypeChanged); ImageChanged=$($Script:Stats.ImageChanged); Unchanged=$($Script:Stats.Unchanged); Missing=$($Script:Stats.Missing); Excluded=$($Script:Stats.Excluded); Collisions=$($Script:Stats.Collisions); Errors=$($Script:Stats.Errors)" -Level INFO
 
 # Write output files
 $LogPrimary = $LogFile
@@ -1359,9 +1926,9 @@ $finalLogPath = Write-SafeFile -PrimaryPath $LogPrimary -FallbackDbPath $LogDbFa
     $Script:DebugLog.ToArray() | Out-File -FilePath $Path -Encoding utf8
 }
 
-# Write CSV (only if changes were made)
+# Write CSV (only if explicitly requested AND changes were made)
 $finalCsvPath = $null
-if ($Script:RenameList.Count -gt 0) {
+if (-not [string]::IsNullOrWhiteSpace($CsvFile) -and $Script:RenameList.Count -gt 0) {
     $finalCsvPath = Write-SafeFile -PrimaryPath $CsvPrimary -FallbackDbPath $CsvDbFallback -FallbackTempPath $CsvTempFallback -Description "Renaming summary" -Writer {
         param([string]$Path)
         $Script:RenameList.ToArray() | Export-Csv -Path $Path -NoTypeInformation -Encoding UTF8
@@ -1393,16 +1960,14 @@ COMMIT;
     }
 }
 
-# Write HTML report (if requested)
-$finalHtmlPath = $null
-if (-not [string]::IsNullOrWhiteSpace($HtmlReport)) {
-    $HtmlDbFallback = Join-Path $DbFolder ("rename_report-{0}.html" -f $Timestamp)
-    $HtmlTempFallback = Join-Path $env:TEMP ("rename_report-{0}.html" -f $Timestamp)
+# Write HTML report (always generated by default)
+$HtmlPrimary = $HtmlReport
+$HtmlDbFallback = Join-Path $DbFolder ("rename_report-{0}.html" -f $Timestamp)
+$HtmlTempFallback = Join-Path $env:TEMP ("rename_report-{0}.html" -f $Timestamp)
 
-    $finalHtmlPath = Write-SafeFile -PrimaryPath $HtmlReport -FallbackDbPath $HtmlDbFallback -FallbackTempPath $HtmlTempFallback -Description "HTML report" -Writer {
-        param([string]$Path)
-        New-HtmlReport -OutputPath $Path -Stats $Script:Stats -RenameList $Script:RenameList -Collisions $Script:NameCollisions -BackupPath $BackupPath -WasDryRun $DryRun
-    }
+$finalHtmlPath = Write-SafeFile -PrimaryPath $HtmlPrimary -FallbackDbPath $HtmlDbFallback -FallbackTempPath $HtmlTempFallback -Description "HTML report" -Writer {
+    param([string]$Path)
+    New-HtmlReport -OutputPath $Path -Stats $Script:Stats -RenameList $Script:RenameList -Collisions $Script:NameCollisions -BackupPath $BackupPath -WasDryRun $DryRun
 }
 
 $Script:Stopwatch.Stop()
@@ -1411,12 +1976,14 @@ Write-Host ""
 
 # Final summary box
 $summaryContent = [ordered]@{
-    Renamed   = $Script:Stats.Renamed
-    Unchanged = $Script:Stats.Unchanged
-    Missing   = $Script:Stats.Missing
-    Excluded  = $Script:Stats.Excluded
-    Collisions = $Script:Stats.Collisions
-    Errors    = $Script:Stats.Errors
+    Renamed      = $Script:Stats.Renamed
+    TypeChanged  = $Script:Stats.TypeChanged
+    ImageChanged = $Script:Stats.ImageChanged
+    Unchanged    = $Script:Stats.Unchanged
+    Missing      = $Script:Stats.Missing
+    Excluded     = $Script:Stats.Excluded
+    Collisions   = $Script:Stats.Collisions
+    Errors       = $Script:Stats.Errors
 }
 
 $boxTitle = if ($DryRun) { "Summary (DRY RUN)" } else { "Summary" }
