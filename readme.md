@@ -6,6 +6,8 @@ Automatically rename your Domoticz devices based on the room and device names co
 
 **The solution:** This script reads your Z-Wave JS export and renames devices to friendly names like `Living Room - Motion Sensor - Motion`, matching your Z-Wave JS configuration. It can also fix device types (so smoke detectors get a Reset button, motion sensors show the right icon, etc.).
 
+<img width="987" height="830" alt="image" src="https://github.com/user-attachments/assets/5cba8a2c-f18f-4c16-8404-54a58ab996e0" />
+
 ---
 
 ## ⚠️ Important: Use with Care
