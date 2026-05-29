@@ -13,5 +13,12 @@ rename_report*.html
 # IDE
 .vscode/
 
+# Claude Code
+CLAUDE.md
+.claude/
+
 # Z-Wave JSON exports
 nodes_dump.json
+
+# Temp directory
+_temp/

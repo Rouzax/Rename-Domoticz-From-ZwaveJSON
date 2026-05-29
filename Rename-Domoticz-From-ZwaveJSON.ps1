@@ -91,7 +91,7 @@
 
 #Requires -Version 7.0
 
-[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+[CmdletBinding()]
 param (
     [Parameter(Mandatory = $true, Position = 0, HelpMessage = "Path to the Z-Wave JSON export file")]
     [ValidateNotNullOrEmpty()]
@@ -1418,6 +1418,7 @@ else {
 # Setup paths
 $DbFolder = Split-Path -Parent $DbPath
 $Timestamp = Get-Date -Format "yy.MM.dd-HH.mm.ss"
+$TempDir = if ($env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR } else { [System.IO.Path]::GetTempPath() }
 $BackupPath = Join-Path $DbFolder "domoticz-$Timestamp.db"
 
 # Set default paths if not provided
@@ -1428,10 +1429,25 @@ if (-not $PSBoundParameters.ContainsKey('LogFile') -or [string]::IsNullOrWhiteSp
     $LogFile = Join-Path $defaultFolder "rename_log.txt"
 }
 if (-not $PSBoundParameters.ContainsKey('CsvFile') -or [string]::IsNullOrWhiteSpace($CsvFile)) {
-    $CsvFile = Join-Path $defaultFolder "rename_summary.csv"
+    $CsvFile = $null
+}
+if (-not $PSBoundParameters.ContainsKey('HtmlReport') -or [string]::IsNullOrWhiteSpace($HtmlReport)) {
+    $HtmlReport = Join-Path $DbFolder ("rename_report-{0}.html" -f $Timestamp)
 }
 if (-not $PSBoundParameters.ContainsKey('UndoFile') -or [string]::IsNullOrWhiteSpace($UndoFile)) {
     $UndoFile = Join-Path $DbFolder "undo_rename-$Timestamp.sql"
+}
+
+# Validate ExcludePattern regex if provided
+if (-not [string]::IsNullOrWhiteSpace($ExcludePattern)) {
+    try {
+        [void]([regex]::new($ExcludePattern))
+    }
+    catch {
+        Write-Host "  ❌ ERROR: Invalid ExcludePattern regex: $ExcludePattern" -ForegroundColor Red
+        Write-Host "     $($_.Exception.Message)" -ForegroundColor Red
+        exit $Script:ExitCodes.Error
+    }
 }
 
 Write-Host ""
@@ -1492,7 +1508,7 @@ catch {
 $allDevices = @{}
 try {
     Write-Host "  Loading device data from database..." -ForegroundColor Gray
-    $rows = Invoke-SqliteQuery -Query "SELECT DeviceID, Name, SwitchType, CustomImage FROM DeviceStatus" -SQLiteConnection $DbConn
+    $rows = Invoke-SqliteQuery -Query "SELECT DeviceID, Name, SwitchType, CustomImage FROM DeviceStatus" -SQLiteConnection $DbConn -ErrorAction Stop
     foreach ($r in $rows) {
         $allDevices[[string]$r.DeviceID] = @{
             Name        = [string]$r.Name
@@ -1674,13 +1690,45 @@ foreach ($Device in $ZwaveData) {
         if ($nameChanged) {
             if ($proposedNames.ContainsKey($NewNameNorm)) {
                 $existingDeviceId = $proposedNames[$NewNameNorm]
-                $Script:NameCollisions.Add([PSCustomObject]@{
-                    NewName   = $NewNameNorm
-                    DeviceID1 = $existingDeviceId
-                    DeviceID2 = $DeviceID
-                })
-                $Script:Stats.Collisions++
-                Write-Log "COLLISION: '$NewNameNorm' would be assigned to both $existingDeviceId and $DeviceID" -Level WARNING
+                $baseIdEscaped = [regex]::Escape($BaseIdentifier)
+
+                # Extract endpoint numbers from both DeviceIDs
+                $currentSuffix = $DeviceID -replace "^${baseIdEscaped}_", ""
+                $existingSuffix = $existingDeviceId -replace "^${baseIdEscaped}_", ""
+                $currentEndpoint = if ($currentSuffix -match '^\d+-\d+-(\d+)') { $Matches[1] } else { $null }
+                $existingEndpoint = if ($existingSuffix -match '^\d+-\d+-(\d+)') { $Matches[1] } else { $null }
+
+                if ($null -ne $currentEndpoint -and $null -ne $existingEndpoint -and $currentEndpoint -ne $existingEndpoint) {
+                    # Auto-resolve: append endpoint number to the existing entry in RenameList
+                    foreach ($item in $Script:RenameList) {
+                        if ($item.DeviceID -eq $existingDeviceId -and $item.NameChanged) {
+                            $item.NewName = "$($item.NewName) - EP$existingEndpoint"
+                            break
+                        }
+                    }
+
+                    # Update tracking: remove base name, add disambiguated existing name
+                    $proposedNames.Remove($NewNameNorm)
+                    $proposedNames["$NewNameNorm - EP$existingEndpoint"] = $existingDeviceId
+
+                    # Disambiguate current device
+                    $NewName = "$NewName - EP$currentEndpoint"
+                    $NewNameNorm = "$NewNameNorm - EP$currentEndpoint"
+                    $proposedNames[$NewNameNorm] = $DeviceID
+
+                    $Script:Stats.Collisions++
+                    Write-Log "COLLISION RESOLVED: Disambiguated with EP$existingEndpoint and EP$currentEndpoint for $existingDeviceId and $DeviceID" -Level INFO
+                }
+                else {
+                    # Cannot auto-resolve (no endpoints or same endpoint)
+                    $Script:NameCollisions.Add([PSCustomObject]@{
+                        NewName   = $NewNameNorm
+                        DeviceID1 = $existingDeviceId
+                        DeviceID2 = $DeviceID
+                    })
+                    $Script:Stats.Collisions++
+                    Write-Log "COLLISION: '$NewNameNorm' would be assigned to both $existingDeviceId and $DeviceID" -Level WARNING
+                }
             }
             else {
                 $proposedNames[$NewNameNorm] = $DeviceID
@@ -1732,8 +1780,13 @@ Write-Host "  ✓ Analysis complete in $(Format-Duration $processingStopwatch.El
 Write-Host ""
 
 # Report collisions
+$autoResolved = $Script:Stats.Collisions - $Script:NameCollisions.Count
+if ($autoResolved -gt 0) {
+    Write-Host "  ✓ $autoResolved name collision(s) auto-resolved with endpoint numbers" -ForegroundColor Green
+}
+
 if ($Script:NameCollisions.Count -gt 0) {
-    Write-Host "  ⚠️  WARNING: $($Script:NameCollisions.Count) name collision(s) detected!" -ForegroundColor Red
+    Write-Host "  ⚠️  WARNING: $($Script:NameCollisions.Count) unresolvable name collision(s) detected!" -ForegroundColor Red
     Write-Host "     The following names would be assigned to multiple devices:" -ForegroundColor Yellow
 
     foreach ($collision in $Script:NameCollisions | Select-Object -First 5) {
@@ -1760,22 +1813,37 @@ if ($Script:NameCollisions.Count -gt 0) {
     }
 }
 
-# Filter out collision devices from rename list
+# Filter out unresolvable collision devices and no-op renames (where collision
+# resolution produced a name matching the existing name)
+$filteredList = [System.Collections.Generic.List[PSCustomObject]]::new()
+$collisionDevices = @()
 if ($Script:NameCollisions.Count -gt 0) {
-    $collisionDevices = @()
     foreach ($c in $Script:NameCollisions) {
         $collisionDevices += $c.DeviceID1
         $collisionDevices += $c.DeviceID2
     }
+}
 
-    $filteredList = [System.Collections.Generic.List[PSCustomObject]]::new()
-    foreach ($item in $Script:RenameList) {
-        if ($item.DeviceID -notin $collisionDevices) {
-            $filteredList.Add($item)
+foreach ($item in $Script:RenameList) {
+    if ($item.DeviceID -in $collisionDevices) { continue }
+
+    # Re-check if name actually changed after collision resolution
+    if ($item.NameChanged -and $null -ne $item.NewName) {
+        $oldNorm = ($item.OldName -replace '\s{2,}', ' ').Trim()
+        $newNorm = ($item.NewName -replace '\s{2,}', ' ').Trim()
+        if ($oldNorm -eq $newNorm) {
+            $item.NameChanged = $false
+            $item.NewName = $null
+            if (-not $item.SwitchTypeChanged -and -not $item.CustomImageChanged) {
+                $Script:Stats.Unchanged++
+                continue
+            }
         }
     }
-    $Script:RenameList = $filteredList
+
+    $filteredList.Add($item)
 }
+$Script:RenameList = $filteredList
 
 # Phase 2: Apply changes
 if ($Script:RenameList.Count -eq 0) {
@@ -1796,7 +1864,7 @@ else {
 
     try {
         if (-not $DryRun) {
-            Invoke-SqliteQuery -Query "BEGIN IMMEDIATE TRANSACTION;" -SQLiteConnection $DbConn
+            Invoke-SqliteQuery -Query "BEGIN IMMEDIATE TRANSACTION;" -SQLiteConnection $DbConn -ErrorAction Stop
             $transactionBegun = $true
             Write-Log "Transaction started" -Level DEBUG
         }
@@ -1837,7 +1905,7 @@ else {
                     }
 
                     $updateQuery = "UPDATE DeviceStatus SET $($setParts -join ', ') WHERE DeviceID = @DeviceID"
-                    Invoke-SqliteQuery -Query $updateQuery -SQLiteConnection $DbConn -SqlParameters $sqlParams
+                    Invoke-SqliteQuery -Query $updateQuery -SQLiteConnection $DbConn -SqlParameters $sqlParams -ErrorAction Stop
 
                     # Update cached data
                     if ($item.NameChanged) {
@@ -1871,20 +1939,22 @@ else {
         }
 
         if (-not $DryRun -and -not $anyUpdateError) {
-            Invoke-SqliteQuery -Query "COMMIT;" -SQLiteConnection $DbConn
+            Invoke-SqliteQuery -Query "COMMIT;" -SQLiteConnection $DbConn -ErrorAction Stop
             Write-Log "Transaction committed successfully" -Level SUCCESS
         }
     }
     catch {
         if ($transactionBegun) {
             try {
-                Invoke-SqliteQuery -Query "ROLLBACK;" -SQLiteConnection $DbConn
+                Invoke-SqliteQuery -Query "ROLLBACK;" -SQLiteConnection $DbConn -ErrorAction Stop
                 Write-Log "Transaction rolled back due to error" -Level WARNING
             }
             catch {
                 Write-Log "ROLLBACK failed: $_" -Level ERROR
             }
         }
+        $Script:Stats.Errors++
+        Write-Host "  ❌ ERROR: Database transaction failed: $_" -ForegroundColor Red
         Write-Log "Transaction failed: $_" -Level ERROR
     }
     finally {
@@ -1914,11 +1984,11 @@ Write-Log "Summary: Renamed=$($Script:Stats.Renamed); TypeChanged=$($Script:Stat
 # Write output files
 $LogPrimary = $LogFile
 $LogDbFallback = Join-Path $DbFolder ("rename_log-{0}.txt" -f $Timestamp)
-$LogTempFallback = Join-Path $env:TEMP ("rename_log-{0}.txt" -f $Timestamp)
+$LogTempFallback = Join-Path $TempDir ("rename_log-{0}.txt" -f $Timestamp)
 
 $CsvPrimary = $CsvFile
 $CsvDbFallback = Join-Path $DbFolder ("rename_summary-{0}.csv" -f $Timestamp)
-$CsvTempFallback = Join-Path $env:TEMP ("rename_summary-{0}.csv" -f $Timestamp)
+$CsvTempFallback = Join-Path $TempDir ("rename_summary-{0}.csv" -f $Timestamp)
 
 # Write debug log
 $finalLogPath = Write-SafeFile -PrimaryPath $LogPrimary -FallbackDbPath $LogDbFallback -FallbackTempPath $LogTempFallback -Description "Debug log" -Writer {
@@ -1939,7 +2009,7 @@ if (-not [string]::IsNullOrWhiteSpace($CsvFile) -and $Script:RenameList.Count -g
 $finalUndoPath = $null
 if (-not $DryRun -and $Script:UndoStatements.Count -gt 0) {
     $UndoDbFallback = Join-Path $DbFolder ("undo_rename-{0}.sql" -f $Timestamp)
-    $UndoTempFallback = Join-Path $env:TEMP ("undo_rename-{0}.sql" -f $Timestamp)
+    $UndoTempFallback = Join-Path $TempDir ("undo_rename-{0}.sql" -f $Timestamp)
 
     $finalUndoPath = Write-SafeFile -PrimaryPath $UndoFile -FallbackDbPath $UndoDbFallback -FallbackTempPath $UndoTempFallback -Description "Undo script" -Writer {
         param([string]$Path)
@@ -1963,7 +2033,7 @@ COMMIT;
 # Write HTML report (always generated by default)
 $HtmlPrimary = $HtmlReport
 $HtmlDbFallback = Join-Path $DbFolder ("rename_report-{0}.html" -f $Timestamp)
-$HtmlTempFallback = Join-Path $env:TEMP ("rename_report-{0}.html" -f $Timestamp)
+$HtmlTempFallback = Join-Path $TempDir ("rename_report-{0}.html" -f $Timestamp)
 
 $finalHtmlPath = Write-SafeFile -PrimaryPath $HtmlPrimary -FallbackDbPath $HtmlDbFallback -FallbackTempPath $HtmlTempFallback -Description "HTML report" -Writer {
     param([string]$Path)
