@@ -71,7 +71,7 @@ This script modifies the **Domoticz database** directly. While it includes safet
 
 ## 🆕 New Features in v2.0
 
-### 🔍 DryRun / WhatIf Mode
+### 🔍 DryRun Mode
 
 Preview all changes without modifying the database:
 
@@ -185,7 +185,7 @@ Exclude devices matching a pattern:
 
 ### ⚠️ Name Collision Detection
 
-The script now detects when two different devices would end up with the same name and warns you before making changes. Collisions are skipped automatically.
+The script detects when two different devices would end up with the same name. Multi-endpoint collisions are auto-resolved by appending the endpoint number (e.g. ` - EP2`, ` - EP3`). Collisions that cannot be resolved automatically are skipped and reported.
 
 ### ↩️ Undo Script Generation
 
@@ -399,7 +399,7 @@ sqlite3 C:\Domoticz\domoticz.db < C:\Domoticz\undo_rename-25.01.30-14.30.45.sql
 | **"Database is locked"** | Stop Domoticz before running, or use `-Force` to continue |
 | **"DeviceID not found"** | Check that JSON IDs match Domoticz DB IDs (spaces → underscores) |
 | **"Base Identifier not found"** | Verify your JSON export has `identifiers` under `hassDevices` |
-| **"Name collision detected"** | Review the collision report; devices with conflicts are skipped |
+| **"Name collision detected"** | Multi-endpoint collisions are auto-resolved with endpoint numbers; unresolvable collisions are skipped |
 | **Logs/CSV not where expected** | Check console output for actual paths; falls back: Script → DB → TEMP |
 
 ---
@@ -484,6 +484,7 @@ Z-Wave devices use endpoints to distinguish channels. The endpoint number appear
 
 | Version | Changes |
 |---------|---------|
+| 2.4 | **Collision auto-resolution**: Multi-endpoint collisions are now resolved automatically by appending endpoint numbers (EP2, EP3, etc.) instead of being skipped. **Robustness fixes**: Cross-platform temp directory support (Linux/macOS), removed WhatIf parameter (use DryRun instead), early ExcludePattern regex validation, transaction failure reporting, explicit error handling on all database calls |
 | 2.3 | **HTML report now default**: Interactive HTML report generated automatically in DB folder. **CSV now optional**: Only generated when `-CsvFile` is specified. **Improved HTML readability**: Device cards now show sensor type suffix (e.g., "› Heat Alarm") for easy identification; human-readable SwitchType/CustomImage descriptions; search and filter functionality |
 | 2.2 | **ImageChanged tracking**: Now shows CustomImage changes separately in stats and reports |
 | 2.1 | **SwitchType/CustomImage support**: Rules can now optionally set `switchType` and `customImage` to configure correct device types (e.g., Smoke Detector with Reset button, Motion Sensor, Door Contact) |
