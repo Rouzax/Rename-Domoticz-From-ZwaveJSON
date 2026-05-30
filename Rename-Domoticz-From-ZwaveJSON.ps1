@@ -1850,8 +1850,8 @@ $renameCount = @($Script:RenameList | Where-Object { $_.NameChanged }).Count
 $typeCount = @($Script:RenameList | Where-Object { $_.SwitchTypeChanged }).Count
 $imageCount = @($Script:RenameList | Where-Object { $_.CustomImageChanged }).Count
 
-# Confirmation prompt (unless Force or DryRun)
-if (-not $Force -and -not $DryRun) {
+# Confirmation prompt (unless Force, DryRun, or no changes)
+if (-not $Force -and -not $DryRun -and ($renameCount + $typeCount + $imageCount) -gt 0) {
     Write-Host ""
     Write-Host "  Proposed changes:" -ForegroundColor White
     if ($renameCount -gt 0) { Write-Host "    Renames:       $renameCount" -ForegroundColor Green }
