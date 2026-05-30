@@ -16,6 +16,7 @@ rename_report*.html
 # Claude Code
 CLAUDE.md
 .claude/
+docs/superpowers/
 
 # Z-Wave JSON exports
 nodes_dump.json

@@ -58,7 +58,7 @@ This script modifies the **Domoticz database** directly. While it includes safet
 |-----------|-------------|---------|
 | `-LogFile` | Path to store the debug log | `<db folder>\rename_log-<timestamp>.txt` |
 | `-CsvFile` | Path to store the renaming summary CSV | None (only generated when specified) |
-| `-RulesFile` | Path to custom renaming rules JSON file | Built-in rules |
+| `-RulesFile` | Path to custom renaming rules JSON file | Auto-loads `rename_rules.json` from script folder if present; otherwise built-in rules |
 | `-HtmlReport` | Path to save the HTML report | `<db folder>\rename_report-<timestamp>.html` |
 | `-UndoFile` | Path to save SQL undo script | `<db folder>\undo_rename-<timestamp>.sql` |
 | `-ExcludeDeviceIds` | Array of DeviceIDs to exclude | None |
@@ -78,6 +78,14 @@ Preview all changes without modifying the database:
 ```powershell
 .\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db" -DryRun
 ```
+
+### 📂 Auto-Loading Rules
+
+The repository includes a `rename_rules.json` with 29 rules covering common Z-Wave device types (smoke detectors, motion sensors, door contacts, battery alerts, etc.), including `switchType` and `customImage` settings.
+
+When you run the script from the repository directory and don't specify `-RulesFile`, this file is loaded automatically. If you download only the `.ps1` file, the script falls back to 7 built-in rules that cover basic label shortening.
+
+To customize, copy `rename_rules.json`, edit it, and either keep it next to the script (auto-loaded) or point to it with `-RulesFile`.
 
 ### 📋 Custom Renaming Rules
 
@@ -275,7 +283,6 @@ Device names are constructed using:
 ║   TypeChanged:     23                     ║
 ║   ImageChanged:    18                     ║
 ║   Unchanged:       454                    ║
-║   Missing:         4113                   ║
 ║   Excluded:        12                     ║
 ║   Collisions:      0                      ║
 ║   Errors:          0                      ║
@@ -408,7 +415,7 @@ sqlite3 C:\Domoticz\domoticz.db < C:\Domoticz\undo_rename-25.01.30-14.30.45.sql
 
 ```
 ├── Rename-Domoticz-From-ZwaveJSON.ps1   # Main script
-├── rename_rules.json                     # Optional: Custom renaming rules
+├── rename_rules.json                     # Extended renaming rules (auto-loaded when present)
 ├── README.md                             # This documentation
 │
 ├── Output files (auto-generated in DB folder):
@@ -484,6 +491,7 @@ Z-Wave devices use endpoints to distinguish channels. The endpoint number appear
 
 | Version | Changes |
 |---------|---------|
+| 2.5 | **UX improvements**: Summary box fields now display in consistent order. Log file defaults to DB folder with timestamp (matching other output files). Malformed rules files now error instead of silently falling back to defaults. `rename_rules.json` is auto-loaded from script directory when present (29 rules vs 7 built-in). Exit code now considers TypeChanged/ImageChanged. Removed non-actionable "Missing" count from summary. Consolidated MISSING log entries into one summary line. Confirmation prompt now shows actual change counts after analysis |
 | 2.4 | **Collision auto-resolution**: Multi-endpoint collisions are now resolved automatically by appending endpoint numbers (EP2, EP3, etc.) instead of being skipped. **Robustness fixes**: Cross-platform temp directory support (Linux/macOS), removed WhatIf parameter (use DryRun instead), early ExcludePattern regex validation, transaction failure reporting, explicit error handling on all database calls |
 | 2.3 | **HTML report now default**: Interactive HTML report generated automatically in DB folder. **CSV now optional**: Only generated when `-CsvFile` is specified. **Improved HTML readability**: Device cards now show sensor type suffix (e.g., "› Heat Alarm") for easy identification; human-readable SwitchType/CustomImage descriptions; search and filter functionality |
 | 2.2 | **ImageChanged tracking**: Now shows CustomImage changes separately in stats and reports |
