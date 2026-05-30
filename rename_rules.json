@@ -19,62 +19,6 @@
   ],
   "rules": [
     {
-      "name": "RGBW Red Channel",
-      "pattern": "38-2-currentValue$",
-      "replace": " - Current value$",
-      "with": " - Red",
-      "description": "Fibaro RGBW Controller red channel (endpoint 2)"
-    },
-    {
-      "name": "RGBW Green Channel",
-      "pattern": "38-3-currentValue$",
-      "replace": " - Current value$",
-      "with": " - Green",
-      "description": "Fibaro RGBW Controller green channel (endpoint 3)"
-    },
-    {
-      "name": "RGBW Blue Channel",
-      "pattern": "38-4-currentValue$",
-      "replace": " - Current value$",
-      "with": " - Blue",
-      "description": "Fibaro RGBW Controller blue channel (endpoint 4)"
-    },
-    {
-      "name": "RGBW White Channel",
-      "pattern": "38-5-currentValue$",
-      "replace": " - Current value$",
-      "with": " - White",
-      "description": "Fibaro RGBW Controller white channel (endpoint 5)"
-    },
-    {
-      "name": "RGBW Red Voltage",
-      "pattern": "49-6-Voltage$",
-      "replace": " - Voltage$",
-      "with": " - Voltage Red",
-      "description": "Fibaro RGBW Controller red channel voltage (endpoint 6)"
-    },
-    {
-      "name": "RGBW Green Voltage",
-      "pattern": "49-7-Voltage$",
-      "replace": " - Voltage$",
-      "with": " - Voltage Green",
-      "description": "Fibaro RGBW Controller green channel voltage (endpoint 7)"
-    },
-    {
-      "name": "RGBW Blue Voltage",
-      "pattern": "49-8-Voltage$",
-      "replace": " - Voltage$",
-      "with": " - Voltage Blue",
-      "description": "Fibaro RGBW Controller blue channel voltage (endpoint 8)"
-    },
-    {
-      "name": "RGBW White Voltage",
-      "pattern": "49-9-Voltage$",
-      "replace": " - Voltage$",
-      "with": " - Voltage White",
-      "description": "Fibaro RGBW Controller white channel voltage (endpoint 9)"
-    },
-    {
       "name": "Remove Current Value for Switch Multilevel",
       "pattern": "38-[01]-currentValue$",
       "replace": " - Current value$",
