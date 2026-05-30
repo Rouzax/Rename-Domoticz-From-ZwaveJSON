@@ -440,6 +440,7 @@ sqlite3 C:\Domoticz\domoticz.db < C:\Domoticz\undo_rename-25.01.30-14.30.45.sql
       "pattern": "regex pattern to match DeviceID$",
       "replace": "regex pattern to match in device name$",
       "with": "replacement string",
+      "nodeMatch": { "productLabel": "regex to match product label" },
       "description": "Optional description"
     }
   ]
@@ -449,9 +450,10 @@ sqlite3 C:\Domoticz\domoticz.db < C:\Domoticz\undo_rename-25.01.30-14.30.45.sql
 ### Rules Processing
 
 1. Rules are processed in order; first matching rule wins.
-2. `pattern` is matched against the **DeviceID**.
-3. `replace` is matched against the **device name**.
-4. Use `\\[` and `\\]` to escape brackets in JSON.
+2. If `nodeMatch` is specified, the rule only applies when **all** specified node properties match their regex patterns. Available properties: `productLabel`, `productDescription`, `manufacturer`. Rules without `nodeMatch` apply to all devices.
+3. `pattern` is matched against the **DeviceID**.
+4. `replace` is matched against the **device name**.
+5. Use `\\[` and `\\]` to escape brackets in JSON.
 
 ### Endpoint Pattern Reference
 
@@ -485,12 +487,27 @@ Z-Wave devices use endpoints to distinguish channels. The endpoint number appear
 }
 ```
 
+**Scope a rule to a specific device type** (e.g., RGBW controller only):
+```json
+{
+  "name": "RGBW Red Channel",
+  "pattern": "38-2-currentValue$",
+  "replace": " - Current value$",
+  "with": " - Red",
+  "nodeMatch": { "productLabel": "FGRGBW" },
+  "description": "Only matches Fibaro RGBW controllers, not regular dimmers"
+}
+```
+
+Without `nodeMatch`, this rule would match endpoint 2 on every device with CC38 (dimmers, blinds, etc.). The `nodeMatch` field restricts it to nodes whose `productLabel` matches the regex `FGRGBW`.
+
 ---
 
 ## 📜 Version History
 
 | Version | Changes |
 |---------|---------|
+| 2.6 | **Node-scoped rules**: New optional `nodeMatch` field lets rules target specific device types by matching Z-Wave node properties (`productLabel`, `productDescription`, `manufacturer`). Added RGBW color channel rules for Fibaro FGRGBW-442 using `nodeMatch` to avoid affecting regular dimmers |
 | 2.5 | **UX improvements**: Summary box fields now display in consistent order. Log file defaults to DB folder with timestamp (matching other output files). Malformed rules files now error instead of silently falling back to defaults. `rename_rules.json` is auto-loaded from script directory when present (29 rules vs 7 built-in). Exit code now considers TypeChanged/ImageChanged. Removed non-actionable "Missing" count from summary. Consolidated MISSING log entries into one summary line. Confirmation prompt now shows actual change counts after analysis |
 | 2.4 | **Collision auto-resolution**: Multi-endpoint collisions are now resolved automatically by appending endpoint numbers (EP2, EP3, etc.) instead of being skipped. **Robustness fixes**: Cross-platform temp directory support (Linux/macOS), removed WhatIf parameter (use DryRun instead), early ExcludePattern regex validation, transaction failure reporting, explicit error handling on all database calls |
 | 2.3 | **HTML report now default**: Interactive HTML report generated automatically in DB folder. **CSV now optional**: Only generated when `-CsvFile` is specified. **Improved HTML readability**: Device cards now show sensor type suffix (e.g., "› Heat Alarm") for easy identification; human-readable SwitchType/CustomImage descriptions; search and filter functionality |

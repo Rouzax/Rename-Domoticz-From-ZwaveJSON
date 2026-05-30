@@ -15,9 +15,81 @@
     "  13 = Alarm icon       - Used for alert sensors (Overcurrent, Overload, etc.)",
     "",
     "NOTE: Most devices (dimmers, switches, blinds, motion CC113, door contacts)",
-    "are created correctly by Domoticz and don't need switchType overrides."
+    "are created correctly by Domoticz and don't need switchType overrides.",
+    "",
+    "NODEMATCH (optional - scopes a rule to specific device types):",
+    "  If specified, the rule only applies to devices whose Z-Wave node properties",
+    "  match all specified regex patterns. Available properties:",
+    "    productLabel       - Device model (e.g. 'FGRGBW-442', 'FGD212')",
+    "    productDescription - Full product name (e.g. 'RGBW CONTROLLER 2')",
+    "    manufacturer       - Manufacturer name (e.g. 'Fibargroup')",
+    "  Example: \"nodeMatch\": {\"productLabel\": \"FGRGBW\"}"
   ],
   "rules": [
+    {
+      "name": "RGBW Red Channel",
+      "pattern": "38-2-currentValue$",
+      "replace": " - Current value$",
+      "with": " - Red",
+      "nodeMatch": { "productLabel": "FGRGBW" },
+      "description": "Fibaro RGBW Controller red channel (endpoint 2)"
+    },
+    {
+      "name": "RGBW Green Channel",
+      "pattern": "38-3-currentValue$",
+      "replace": " - Current value$",
+      "with": " - Green",
+      "nodeMatch": { "productLabel": "FGRGBW" },
+      "description": "Fibaro RGBW Controller green channel (endpoint 3)"
+    },
+    {
+      "name": "RGBW Blue Channel",
+      "pattern": "38-4-currentValue$",
+      "replace": " - Current value$",
+      "with": " - Blue",
+      "nodeMatch": { "productLabel": "FGRGBW" },
+      "description": "Fibaro RGBW Controller blue channel (endpoint 4)"
+    },
+    {
+      "name": "RGBW White Channel",
+      "pattern": "38-5-currentValue$",
+      "replace": " - Current value$",
+      "with": " - White",
+      "nodeMatch": { "productLabel": "FGRGBW" },
+      "description": "Fibaro RGBW Controller white channel (endpoint 5)"
+    },
+    {
+      "name": "RGBW Red Voltage",
+      "pattern": "49-6-Voltage$",
+      "replace": " - Voltage$",
+      "with": " - Voltage Red",
+      "nodeMatch": { "productLabel": "FGRGBW" },
+      "description": "Fibaro RGBW Controller red channel voltage (endpoint 6)"
+    },
+    {
+      "name": "RGBW Green Voltage",
+      "pattern": "49-7-Voltage$",
+      "replace": " - Voltage$",
+      "with": " - Voltage Green",
+      "nodeMatch": { "productLabel": "FGRGBW" },
+      "description": "Fibaro RGBW Controller green channel voltage (endpoint 7)"
+    },
+    {
+      "name": "RGBW Blue Voltage",
+      "pattern": "49-8-Voltage$",
+      "replace": " - Voltage$",
+      "with": " - Voltage Blue",
+      "nodeMatch": { "productLabel": "FGRGBW" },
+      "description": "Fibaro RGBW Controller blue channel voltage (endpoint 8)"
+    },
+    {
+      "name": "RGBW White Voltage",
+      "pattern": "49-9-Voltage$",
+      "replace": " - Voltage$",
+      "with": " - Voltage White",
+      "nodeMatch": { "productLabel": "FGRGBW" },
+      "description": "Fibaro RGBW Controller white channel voltage (endpoint 9)"
+    },
     {
       "name": "Remove Current Value for Switch Multilevel",
       "pattern": "38-[01]-currentValue$",
