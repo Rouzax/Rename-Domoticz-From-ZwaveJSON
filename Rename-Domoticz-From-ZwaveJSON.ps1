@@ -1645,8 +1645,25 @@ foreach ($d in $ZwaveData) {
     }
 }
 
-# Track proposed names for collision detection
+# Track proposed names for collision detection.
+#
+# Seed with the current name of every existing device so a rename that would
+# collide with a device KEEPING its name (not just with another pending
+# rename) is detected against the true end state. Without this seed, a rename
+# landing on an already-correctly-named device slipped through undetected and
+# silently created duplicate names.
+#
+# $pendingNames marks names owned by an actual pending rename; those may be
+# auto-disambiguated with endpoint suffixes. Seeded names belong to devices
+# that keep their current name and must never be silently renamed.
 $proposedNames = @{}
+$pendingNames = [System.Collections.Generic.HashSet[string]]::new()
+foreach ($seedId in $allDevices.Keys) {
+    $seedName = ([string]$allDevices[$seedId].Name -replace '\s{2,}', ' ').Trim()
+    if (-not $proposedNames.ContainsKey($seedName)) {
+        $proposedNames[$seedName] = $seedId
+    }
+}
 
 # First pass: collect all proposed renames and detect collisions
 Write-Host "  Phase 1: Analyzing proposed changes..." -ForegroundColor Cyan
@@ -1730,10 +1747,15 @@ foreach ($Device in $ZwaveData) {
             continue
         }
 
-        # Check for name collision (only if name is changing)
+        # Check for name collision (only if the name is actually changing).
+        #
+        # Because $proposedNames is seeded with every existing device name, this
+        # catches a rename landing on a device that keeps its name, not only a
+        # clash between two pending renames.
         if ($nameChanged) {
             if ($proposedNames.ContainsKey($NewNameNorm)) {
                 $existingDeviceId = $proposedNames[$NewNameNorm]
+                $existingIsPending = $pendingNames.Contains($NewNameNorm)
                 $baseIdEscaped = [regex]::Escape($BaseIdentifier)
 
                 # Extract endpoint numbers from both DeviceIDs
@@ -1742,8 +1764,12 @@ foreach ($Device in $ZwaveData) {
                 $currentEndpoint = if ($currentSuffix -match '^\d+-\d+-(\d+)') { $Matches[1] } else { $null }
                 $existingEndpoint = if ($existingSuffix -match '^\d+-\d+-(\d+)') { $Matches[1] } else { $null }
 
-                if ($null -ne $currentEndpoint -and $null -ne $existingEndpoint -and $currentEndpoint -ne $existingEndpoint) {
-                    # Auto-resolve: append endpoint number to the existing entry in RenameList
+                $endpointsDiffer = ($null -ne $currentEndpoint -and $null -ne $existingEndpoint -and $currentEndpoint -ne $existingEndpoint)
+                $disambiguatedNorm = "$NewNameNorm - EP$currentEndpoint"
+
+                if ($endpointsDiffer -and $existingIsPending) {
+                    # Both sides are pending renames on different endpoints:
+                    # disambiguate BOTH by appending their endpoint numbers.
                     foreach ($item in $Script:RenameList) {
                         if ($item.DeviceID -eq $existingDeviceId -and $item.NameChanged) {
                             $item.NewName = "$($item.NewName) - EP$existingEndpoint"
@@ -1753,18 +1779,35 @@ foreach ($Device in $ZwaveData) {
 
                     # Update tracking: remove base name, add disambiguated existing name
                     $proposedNames.Remove($NewNameNorm)
+                    [void]$pendingNames.Remove($NewNameNorm)
                     $proposedNames["$NewNameNorm - EP$existingEndpoint"] = $existingDeviceId
+                    [void]$pendingNames.Add("$NewNameNorm - EP$existingEndpoint")
 
-                    # Disambiguate current device
+                    # Free this device's old name and register its disambiguated name
+                    if ($proposedNames[$OldNameNorm] -eq $DeviceID) { $proposedNames.Remove($OldNameNorm); [void]$pendingNames.Remove($OldNameNorm) }
                     $NewName = "$NewName - EP$currentEndpoint"
-                    $NewNameNorm = "$NewNameNorm - EP$currentEndpoint"
+                    $NewNameNorm = $disambiguatedNorm
                     $proposedNames[$NewNameNorm] = $DeviceID
+                    [void]$pendingNames.Add($NewNameNorm)
 
                     $Script:Stats.Collisions++
                     Write-Log "COLLISION RESOLVED: Disambiguated with EP$existingEndpoint and EP$currentEndpoint for $existingDeviceId and $DeviceID" -Level INFO
                 }
+                elseif ($endpointsDiffer -and -not $proposedNames.ContainsKey($disambiguatedNorm)) {
+                    # Existing owner keeps its name (not a pending rename). Leave it
+                    # alone and disambiguate only THIS device with its endpoint.
+                    if ($proposedNames[$OldNameNorm] -eq $DeviceID) { $proposedNames.Remove($OldNameNorm); [void]$pendingNames.Remove($OldNameNorm) }
+                    $NewName = "$NewName - EP$currentEndpoint"
+                    $NewNameNorm = $disambiguatedNorm
+                    $proposedNames[$NewNameNorm] = $DeviceID
+                    [void]$pendingNames.Add($NewNameNorm)
+
+                    $Script:Stats.Collisions++
+                    Write-Log "COLLISION RESOLVED: Disambiguated $DeviceID with EP$currentEndpoint (conflicted with $existingDeviceId)" -Level INFO
+                }
                 else {
-                    # Cannot auto-resolve (no endpoints or same endpoint)
+                    # Cannot auto-resolve (same endpoint, missing endpoints, or the
+                    # disambiguated name is itself taken). Report and skip both.
                     $Script:NameCollisions.Add([PSCustomObject]@{
                         NewName   = $NewNameNorm
                         DeviceID1 = $existingDeviceId
@@ -1775,7 +1818,10 @@ foreach ($Device in $ZwaveData) {
                 }
             }
             else {
+                # Free this device's old name (it is moving) and claim the new one.
+                if ($proposedNames[$OldNameNorm] -eq $DeviceID) { $proposedNames.Remove($OldNameNorm); [void]$pendingNames.Remove($OldNameNorm) }
                 $proposedNames[$NewNameNorm] = $DeviceID
+                [void]$pendingNames.Add($NewNameNorm)
             }
         }
 
@@ -1853,7 +1899,7 @@ if ($Script:NameCollisions.Count -gt 0) {
         if ($response -notmatch '^[Yy]') {
             Write-Host "  Operation cancelled by user." -ForegroundColor Yellow
             if ($DbConn) {
-                try { $DbConn.Close() } catch { }
+                try { $DbConn.Close() } catch { Write-Log "Failed to close connection: $_" -Level WARNING }
             }
             exit $Script:ExitCodes.UserCancelled
         }
@@ -1910,7 +1956,7 @@ if (-not $Force -and -not $DryRun -and ($renameCount + $typeCount + $imageCount)
     if ($response -notmatch '^[Yy]') {
         Write-Host "  Operation cancelled by user." -ForegroundColor Yellow
         if ($DbConn) {
-            try { $DbConn.Close() } catch { }
+            try { $DbConn.Close() } catch { Write-Log "Failed to close connection: $_" -Level WARNING }
         }
         exit $Script:ExitCodes.UserCancelled
     }
