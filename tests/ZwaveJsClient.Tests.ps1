@@ -31,3 +31,23 @@ Describe 'ConvertFrom-EngineIoOpen' {
         InModuleScope ZwaveJsClient { { ConvertFrom-EngineIoOpen -Body '0{"pingInterval":25000}' } | Should -Throw }
     }
 }
+
+Describe 'Split-EngineIoPayload' {
+    It 'splits multiple packets on the U+001E record separator' {
+        InModuleScope ZwaveJsClient {
+            $sep = [char]0x1e
+            $packets = Split-EngineIoPayload -Body ("40{`"sid`":`"x`"}" + $sep + '42["INITED",{}]')
+            $packets.Count | Should -Be 2
+            $packets[0] | Should -Be '40{"sid":"x"}'
+            $packets[1] | Should -Be '42["INITED",{}]'
+        }
+    }
+
+    It 'returns a single-element array for one packet' {
+        InModuleScope ZwaveJsClient { (Split-EngineIoPayload -Body '42["INITED",{}]').Count | Should -Be 1 }
+    }
+
+    It 'returns an empty array for an empty body' {
+        InModuleScope ZwaveJsClient { (Split-EngineIoPayload -Body '').Count | Should -Be 0 }
+    }
+}

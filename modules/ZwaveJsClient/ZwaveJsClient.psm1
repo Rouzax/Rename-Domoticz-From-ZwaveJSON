@@ -36,4 +36,17 @@ function ConvertFrom-EngineIoOpen {
     }
 }
 
+function Split-EngineIoPayload {
+    <#
+    .SYNOPSIS
+        Splits an engine.io v4 polling body into individual packets.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Body)
+
+    if ($Body.Length -eq 0) { return , @() }
+    # EIO4 polling separates packets with the record separator U+001E.
+    return , @($Body.Split([char]0x1e))
+}
+
 Export-ModuleMember -Function Get-ZwaveJsNodes
