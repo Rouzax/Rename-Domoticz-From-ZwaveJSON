@@ -16,17 +16,42 @@ This script modifies the **Domoticz database** directly. While it includes safet
 
 **Before running:**
 
-1. **Test with `-DryRun` first** — Preview changes without modifying anything
-2. **Let it create a backup** — The script automatically backs up your database
-3. **Review the HTML report** — Check the changes look correct before running live
+1. **Stop Domoticz before applying changes** — Domoticz caches device rows in memory and periodically writes them back, so it can overwrite your renames while it runs, and new names only appear after a restart anyway. `-DryRun` is safe to run at any time. The script warns you (cross-platform) if the database is still in use, but you should stop Domoticz regardless.
+2. **Test with `-DryRun` first** — Preview changes without modifying anything
+3. **Let it create a backup** — The script automatically backs up your database
+4. **Review the HTML report** — Check the changes look correct before running live
 
 ---
 
 ## 📥 Requirements
 
 * **PowerShell 7.0+** (required for emoji support and System.Web.HttpUtility)
-* **PSSQLite Module** (Install with `Install-Module -Name PSSQLite`)
+* **SQLite assemblies** provisioned by `setup.ps1` (see below). No system SQLite or PSSQLite module is needed.
 * **Z-Wave JS UI** with JSON export
+* **Internet access on first setup** (to download the SQLite assemblies once)
+
+---
+
+## 🧰 First-Time Setup
+
+The script talks to the Domoticz database through **Microsoft.Data.Sqlite** plus a
+native SQLite library. Run the setup script once per machine to download the
+pinned, checksum-verified assemblies into a local `lib/` folder:
+
+```powershell
+pwsh ./setup.ps1
+```
+
+`setup.ps1` detects your CPU/OS and fetches the matching native SQLite. This is
+what lets the tool run on **ARM (Raspberry Pi), x64, and Apple Silicon** alike:
+supported runtimes include `linux-x64`, `linux-arm64`, `linux-arm`, `win-x64`,
+and `osx-arm64`. The download is a one-time step; re-run it (or `setup.ps1 -Force`)
+only after upgrading the pinned versions. The `lib/` folder is not committed to
+git.
+
+> **Raspberry Pi note:** the older PSSQLite module shipped only x86/x64 native
+> SQLite and could not run on ARM. This setup replaces it and works natively on
+> Pi OS (64-bit `linux-arm64` recommended; 32-bit `linux-arm` also supported).
 
 ---
 
@@ -193,7 +218,7 @@ Exclude devices matching a pattern:
 
 ### ⚠️ Name Collision Detection
 
-The script detects when two different devices would end up with the same name. Multi-endpoint collisions are auto-resolved by appending the endpoint number (e.g. ` - EP2`, ` - EP3`). Collisions that cannot be resolved automatically are skipped and reported.
+The script detects when a rename would collide with **any** device in the final state, including devices that keep their current name, not just clashes between two proposed renames. Collisions on different endpoints are auto-resolved by appending the endpoint number (e.g. ` - EP2`, ` - EP3`). Collisions on the same endpoint (or against a device that keeps its name) are reported and skipped, so the script never writes a duplicate name.
 
 ### ↩️ Undo Script Generation
 
@@ -219,9 +244,15 @@ To specify a custom path:
     -HtmlReport "D:\Reports\rename_report.html"
 ```
 
-### 🔒 Database Lock Detection
+### 🔒 Database Usage Detection
 
-The script checks if the database is locked by another process (e.g., Domoticz) before making changes.
+Before making changes, the script checks whether another process (typically a running Domoticz) has the database open, and warns you with the process name. This check is **cross-platform**:
+
+- **Linux** (incl. Raspberry Pi): scans `/proc` for a process holding the DB or its `-wal`/`-journal` files open (no extra tools needed).
+- **Windows**: attempts an exclusive open.
+- **macOS**: uses `lsof` when available.
+
+It is best-effort, not a guarantee: SQLite locks are transient, and on Linux it can only see handles owned by processes visible to the current user. **Always stop Domoticz before applying changes** (see below).
 
 ### ⏱️ Progress Bar with ETA
 
@@ -299,7 +330,7 @@ Device names are constructed using:
 Detailed log with timestamps:
 
 ```
-[2025-01-30 14:30:45] [INFO] PSSQLite module imported successfully
+[2025-01-30 14:30:45] [INFO] SQLite engine initialised from ./lib
 [2025-01-30 14:30:45] [SUCCESS] Connected to SQLite database: C:\Domoticz\domoticz.db
 [2025-01-30 14:30:46] [SUCCESS] Loaded 529 DeviceStatus rows into memory
 [2025-01-30 14:30:46] [INFO] Using Base Identifier: zwavejs2mqtt_XXXXXXXX
@@ -402,8 +433,9 @@ sqlite3 C:\Domoticz\domoticz.db < C:\Domoticz\undo_rename-25.01.30-14.30.45.sql
 
 | Issue | Solution |
 |-------|----------|
-| **"PSSQLite module missing"** | Run: `Install-Module -Name PSSQLite -Scope CurrentUser` |
-| **"Database is locked"** | Stop Domoticz before running, or use `-Force` to continue |
+| **"SQLite engine unavailable"** | Run `pwsh ./setup.ps1` to download the SQLite assemblies into `lib/` |
+| **"No native SQLite for '<rid>'"** | Your platform is not in the pinned native package; open an issue with the reported runtime identifier |
+| **"Database is open by ..."** | Stop Domoticz before applying changes (it can overwrite renames from its in-memory cache); `-DryRun` is always safe |
 | **"DeviceID not found"** | Check that JSON IDs match Domoticz DB IDs (spaces → underscores) |
 | **"Base Identifier not found"** | Verify your JSON export has `identifiers` under `hassDevices` |
 | **"Name collision detected"** | Multi-endpoint collisions are auto-resolved with endpoint numbers; unresolvable collisions are skipped |
@@ -415,8 +447,12 @@ sqlite3 C:\Domoticz\domoticz.db < C:\Domoticz\undo_rename-25.01.30-14.30.45.sql
 
 ```
 ├── Rename-Domoticz-From-ZwaveJSON.ps1   # Main script
+├── setup.ps1                             # One-time: fetch pinned SQLite assemblies into lib/
 ├── rename_rules.json                     # Extended renaming rules (auto-loaded when present)
 ├── README.md                             # This documentation
+├── modules/DomoticzSqlite/               # SQLite data-access module (Microsoft.Data.Sqlite)
+├── tests/                                # Pester tests (Invoke-Pester -Path ./tests)
+├── lib/                                  # SQLite assemblies (git-ignored; created by setup.ps1)
 │
 ├── Output files (auto-generated in DB folder):
 │   ├── rename_log-<timestamp>.txt        # Detailed operation log
@@ -507,6 +543,7 @@ Without `nodeMatch`, this rule would match endpoint 2 on every device with CC38 
 
 | Version | Changes |
 |---------|---------|
+| 2.7 | **ARM / Raspberry Pi support**: replaced the PSSQLite module with Microsoft.Data.Sqlite + SQLitePCLRaw, provisioned by a new pinned, checksum-verified `setup.ps1` that selects the native SQLite for your platform (`linux-arm64`, `linux-arm`, `linux-x64`, `win-x64`, `osx-arm64`, ...). Extracted the data layer into a `DomoticzSqlite` module with Pester tests. **Cross-platform database-in-use detection** (Linux `/proc` scan, Windows exclusive-open, macOS `lsof`) replaces the previous Windows-only lock check and names the holding process. **Collision detection** now checks a proposed name against the full end state (including devices that keep their name), so it can no longer silently create a duplicate |
 | 2.6 | **Node-scoped rules**: New optional `nodeMatch` field lets rules target specific device types by matching Z-Wave node properties (`productLabel`, `productDescription`, `manufacturer`). Added RGBW color channel rules for Fibaro FGRGBW-442 using `nodeMatch` to avoid affecting regular dimmers |
 | 2.5 | **UX improvements**: Summary box fields now display in consistent order. Log file defaults to DB folder with timestamp (matching other output files). Malformed rules files now error instead of silently falling back to defaults. `rename_rules.json` is auto-loaded from script directory when present (29 rules vs 7 built-in). Exit code now considers TypeChanged/ImageChanged. Removed non-actionable "Missing" count from summary. Consolidated MISSING log entries into one summary line. Confirmation prompt now shows actual change counts after analysis |
 | 2.4 | **Collision auto-resolution**: Multi-endpoint collisions are now resolved automatically by appending endpoint numbers (EP2, EP3, etc.) instead of being skipped. **Robustness fixes**: Cross-platform temp directory support (Linux/macOS), removed WhatIf parameter (use DryRun instead), early ExcludePattern regex validation, transaction failure reporting, explicit error handling on all database calls |

@@ -23,3 +23,6 @@ nodes_dump.json
 
 # Temp directory
 _temp/
+
+# Vendored SQLite assemblies (fetched by setup.ps1, not committed)
+lib/

@@ -86,7 +86,7 @@
 .NOTES
     Author:  Rouzax
     Version: 2.6
-    Requires: PowerShell 7.0+ and PSSQLite module
+    Requires: PowerShell 7.0+ and the SQLite assemblies from setup.ps1 (./lib)
     Encoding: Save as UTF-8 (no BOM) if you prefer that style.
 #>
 
@@ -199,33 +199,9 @@ function Write-Log {
     }
 }
 
-function Test-DatabaseLocked {
-    <#
-    .SYNOPSIS
-        Checks if the SQLite database is locked by another process.
-    #>
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory)]
-        [string]$Path
-    )
-
-    try {
-        # Try to open with exclusive access
-        $stream = [System.IO.File]::Open($Path, 'Open', 'ReadWrite', 'None')
-        $stream.Close()
-        $stream.Dispose()
-        return $false
-    }
-    catch [System.IO.IOException] {
-        return $true
-    }
-    catch {
-        # Other errors - assume not locked but log warning
-        Write-Log "Could not determine lock status: $_" -Level WARNING
-        return $false
-    }
-}
+# Note: detecting whether the database is in use is handled cross-platform by
+# Test-DatabaseInUse in the DomoticzSqlite module (Linux /proc scan, Windows
+# exclusive-open, macOS lsof).
 
 function New-ParentDirectoryIfMissing {
     <#
@@ -1413,24 +1389,22 @@ if ($DryRun) {
     Write-Host ""
 }
 
-# Ensure PSSQLite module is available
+# Ensure the SQLite engine is available. Microsoft.Data.Sqlite plus a native
+# SQLite build live in ./lib and are provisioned by setup.ps1, which selects the
+# native library for this machine's CPU, so ARM (Raspberry Pi) is supported.
 Write-Host "  Checking prerequisites..." -ForegroundColor Gray
 
-$psSqliteModule = Get-Module -ListAvailable -Name PSSQLite
-if (-not $psSqliteModule) {
-    Write-Host "  ❌ ERROR: PSSQLite module is missing!" -ForegroundColor Red
-    Write-Host "     Install it with: " -NoNewline
-    Write-Host "Install-Module -Name PSSQLite" -ForegroundColor Yellow
-    exit $Script:ExitCodes.Error
-}
-
 try {
-    Import-Module PSSQLite -ErrorAction Stop
-    Write-Log "PSSQLite module imported successfully (version: $($psSqliteModule.Version))" -Level INFO
-    Write-Host "  ✓ PSSQLite module loaded" -ForegroundColor Green
+    Import-Module (Join-Path $PSScriptRoot 'modules/DomoticzSqlite/DomoticzSqlite.psd1') -Force -ErrorAction Stop
+    Initialize-SqliteEngine -LibDir (Join-Path $PSScriptRoot 'lib') -ErrorAction Stop
+    Write-Log "SQLite engine initialised from ./lib" -Level INFO
+    Write-Host "  ✓ SQLite engine loaded" -ForegroundColor Green
 }
 catch {
-    Write-Host "  ❌ ERROR: Failed to import PSSQLite module: $_" -ForegroundColor Red
+    Write-Host "  ❌ ERROR: SQLite engine unavailable: $_" -ForegroundColor Red
+    Write-Host "     Run " -NoNewline
+    Write-Host "pwsh ./setup.ps1" -ForegroundColor Yellow -NoNewline
+    Write-Host " to download the required SQLite assemblies." -ForegroundColor Gray
     exit $Script:ExitCodes.Error
 }
 
@@ -1447,11 +1421,20 @@ if (-not (Test-Path -LiteralPath $JsonFile)) {
 }
 Write-Host "  ✓ JSON file found" -ForegroundColor Green
 
-# Check if database is locked
-Write-Host "  Checking database lock status..." -ForegroundColor Gray
-if (Test-DatabaseLocked -Path $DbPath) {
-    Write-Host "  ⚠️  WARNING: Database appears to be locked by another process!" -ForegroundColor Yellow
-    Write-Host "     Please ensure Domoticz is stopped or not actively writing to the database." -ForegroundColor Yellow
+# Check whether another process (typically a running Domoticz) has the database
+# open. Best-effort and cross-platform; see Test-DatabaseInUse. Always stop
+# Domoticz before applying changes: it caches device rows in memory and can
+# overwrite the new names, and the changes only appear after a restart anyway.
+Write-Host "  Checking database usage..." -ForegroundColor Gray
+$dbUsage = Test-DatabaseInUse -Path $DbPath
+if ($dbUsage.InUse) {
+    $who = if ($dbUsage.Holders) {
+        ($dbUsage.Holders | ForEach-Object { if ($_.Pid) { "$($_.Name) (PID $($_.Pid))" } else { $_.Name } }) -join ', '
+    } else { 'another process' }
+    Write-Host "  ⚠️  WARNING: The database is open by $who." -ForegroundColor Yellow
+    Write-Host "     Stop Domoticz before applying changes - it caches device names in memory and" -ForegroundColor Yellow
+    Write-Host "     can overwrite your renames (and changes only show after a restart)." -ForegroundColor Yellow
+    Write-Log "Database in use (method=$($dbUsage.Method)): $who" -Level WARNING
 
     if (-not $Force -and -not $DryRun) {
         $response = Read-Host "     Continue anyway? (y/N)"
@@ -1462,7 +1445,7 @@ if (Test-DatabaseLocked -Path $DbPath) {
     }
 }
 else {
-    Write-Host "  ✓ Database is not locked" -ForegroundColor Green
+    Write-Host "  ✓ Database not held by another process" -ForegroundColor Green
 }
 
 # Setup paths
@@ -1550,7 +1533,7 @@ else {
 # Open database connection
 $DbConn = $null
 try {
-    $DbConn = New-SQLiteConnection -DataSource $DbPath
+    $DbConn = Open-SqliteDatabase -Path $DbPath
     Write-Log "Connected to SQLite database: $DbPath" -Level SUCCESS
     Write-Host "  ✓ Database connection established" -ForegroundColor Green
 }
@@ -1563,7 +1546,7 @@ catch {
 $allDevices = @{}
 try {
     Write-Host "  Loading device data from database..." -ForegroundColor Gray
-    $rows = Invoke-SqliteQuery -Query "SELECT DeviceID, Name, SwitchType, CustomImage FROM DeviceStatus" -SQLiteConnection $DbConn -ErrorAction Stop
+    $rows = Invoke-SqliteReader -Connection $DbConn -Sql "SELECT DeviceID, Name, SwitchType, CustomImage FROM DeviceStatus"
     foreach ($r in $rows) {
         $allDevices[[string]$r.DeviceID] = @{
             Name        = [string]$r.Name
@@ -1982,7 +1965,7 @@ else {
 
     try {
         if (-not $DryRun) {
-            Invoke-SqliteQuery -Query "BEGIN IMMEDIATE TRANSACTION;" -SQLiteConnection $DbConn -ErrorAction Stop
+            [void](Invoke-SqliteNonQuery -Connection $DbConn -Sql "BEGIN IMMEDIATE TRANSACTION;")
             $transactionBegun = $true
             Write-Log "Transaction started" -Level DEBUG
         }
@@ -2023,7 +2006,7 @@ else {
                     }
 
                     $updateQuery = "UPDATE DeviceStatus SET $($setParts -join ', ') WHERE DeviceID = @DeviceID"
-                    Invoke-SqliteQuery -Query $updateQuery -SQLiteConnection $DbConn -SqlParameters $sqlParams -ErrorAction Stop
+                    [void](Invoke-SqliteNonQuery -Connection $DbConn -Sql $updateQuery -Parameters $sqlParams)
 
                     # Update cached data
                     if ($item.NameChanged) {
@@ -2057,14 +2040,14 @@ else {
         }
 
         if (-not $DryRun -and -not $anyUpdateError) {
-            Invoke-SqliteQuery -Query "COMMIT;" -SQLiteConnection $DbConn -ErrorAction Stop
+            [void](Invoke-SqliteNonQuery -Connection $DbConn -Sql "COMMIT;")
             Write-Log "Transaction committed successfully" -Level SUCCESS
         }
     }
     catch {
         if ($transactionBegun) {
             try {
-                Invoke-SqliteQuery -Query "ROLLBACK;" -SQLiteConnection $DbConn -ErrorAction Stop
+                [void](Invoke-SqliteNonQuery -Connection $DbConn -Sql "ROLLBACK;")
                 Write-Log "Transaction rolled back due to error" -Level WARNING
             }
             catch {

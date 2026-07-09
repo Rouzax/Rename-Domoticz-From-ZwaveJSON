@@ -15,15 +15,23 @@
     that keeps its name), not only against other pending renames.
 
     Run with:  Invoke-Pester -Path ./tests
+
+    These tests build and read fixture databases through the same SQLite engine
+    the tool uses, provisioned by setup.ps1 into ./lib. If ./lib is absent they
+    skip cleanly (run "pwsh ./setup.ps1" first).
 #>
 
-BeforeAll {
-    $script:ScriptPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'Rename-Domoticz-From-ZwaveJSON.ps1'
+# Discovery-time: decide whether the SQLite engine is present so the Describe
+# block below can be skipped without failing.
+$EngineAvailable = Test-Path -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib/Microsoft.Data.Sqlite.dll')
 
-    if (-not (Get-Module -ListAvailable -Name PSSQLite)) {
-        throw 'PSSQLite module is required to run these tests (Install-Module PSSQLite).'
-    }
-    Import-Module PSSQLite -ErrorAction Stop
+BeforeAll {
+    $script:RepoRoot = Split-Path $PSScriptRoot -Parent
+    $script:ScriptPath = Join-Path $script:RepoRoot 'Rename-Domoticz-From-ZwaveJSON.ps1'
+    $script:LibDir = Join-Path $script:RepoRoot 'lib'
+
+    Import-Module (Join-Path $script:RepoRoot 'modules/DomoticzSqlite/DomoticzSqlite.psd1') -Force -ErrorAction Stop
+    Initialize-SqliteEngine -LibDir $script:LibDir
 
     # Minimal Z-Wave export using synthetic English placeholder names that do
     # not correspond to any real installation. The base identifier 'test' is
@@ -88,11 +96,11 @@ BeforeAll {
     function New-TestDatabase {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Test helper writing a throwaway fixture database; nothing to confirm.')]
         param([Parameter(Mandatory)][string]$Path)
-        $conn = New-SQLiteConnection -DataSource $Path
+        $conn = Open-SqliteDatabase -Path $Path -CreateIfMissing
         try {
-            Invoke-SqliteQuery -SQLiteConnection $conn -Query 'CREATE TABLE DeviceStatus (DeviceID TEXT, Name TEXT, SwitchType INTEGER, CustomImage INTEGER)' | Out-Null
+            [void](Invoke-SqliteNonQuery -Connection $conn -Sql 'CREATE TABLE DeviceStatus (DeviceID TEXT, Name TEXT, SwitchType INTEGER, CustomImage INTEGER)')
             foreach ($id in $script:OriginalNames.Keys) {
-                Invoke-SqliteQuery -SQLiteConnection $conn -Query 'INSERT INTO DeviceStatus (DeviceID, Name, SwitchType, CustomImage) VALUES (@id, @name, 8, 0)' -SqlParameters @{ id = $id; name = $script:OriginalNames[$id] } | Out-Null
+                [void](Invoke-SqliteNonQuery -Connection $conn -Sql 'INSERT INTO DeviceStatus (DeviceID, Name, SwitchType, CustomImage) VALUES (@id, @name, 8, 0)' -Parameters @{ id = $id; name = $script:OriginalNames[$id] })
             }
         }
         finally { $conn.Close() }
@@ -100,9 +108,9 @@ BeforeAll {
 
     function Get-DeviceNameMap {
         param([Parameter(Mandatory)][string]$Path)
-        $conn = New-SQLiteConnection -DataSource $Path
+        $conn = Open-SqliteDatabase -Path $Path
         try {
-            $rows = Invoke-SqliteQuery -SQLiteConnection $conn -Query 'SELECT DeviceID, Name FROM DeviceStatus'
+            $rows = Invoke-SqliteReader -Connection $conn -Sql 'SELECT DeviceID, Name FROM DeviceStatus'
         }
         finally { $conn.Close() }
         $map = @{}
@@ -111,7 +119,7 @@ BeforeAll {
     }
 }
 
-Describe 'Collision detection against the end state' {
+Describe 'Collision detection against the end state' -Skip:(-not $EngineAvailable) {
     BeforeAll {
         $script:WorkDir = Join-Path ([System.IO.Path]::GetTempPath()) ("renamer-test-" + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $script:WorkDir -Force | Out-Null
