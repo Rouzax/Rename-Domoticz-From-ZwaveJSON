@@ -51,3 +51,40 @@ Describe 'Split-EngineIoPayload' {
         InModuleScope ZwaveJsClient { (Split-EngineIoPayload -Body '').Count | Should -Be 0 }
     }
 }
+
+Describe 'ConvertFrom-SocketIoPacket' {
+    It 'parses an EVENT packet into event name and args' {
+        InModuleScope ZwaveJsClient {
+            $p = ConvertFrom-SocketIoPacket -Packet '42["INITED",{"nodes":[{"id":5}]}]'
+            $p.EioType | Should -Be '4'
+            $p.SioType | Should -Be '2'
+            $p.Event | Should -Be 'INITED'
+            $p.Args[0].nodes[0].id | Should -Be 5
+        }
+    }
+
+    It 'parses a CONNECT packet' {
+        InModuleScope ZwaveJsClient {
+            $p = ConvertFrom-SocketIoPacket -Packet '40{"sid":"nsp-sid"}'
+            $p.SioType | Should -Be '0'
+            $p.Event | Should -BeNullOrEmpty
+            $p.Args[0].sid | Should -Be 'nsp-sid'
+        }
+    }
+
+    It 'parses a CONNECT_ERROR packet' {
+        InModuleScope ZwaveJsClient {
+            $p = ConvertFrom-SocketIoPacket -Packet '44{"message":"Authentication failed"}'
+            $p.SioType | Should -Be '4'
+            $p.Args[0].message | Should -Be 'Authentication failed'
+        }
+    }
+
+    It 'returns null-ish fields for a ping packet' {
+        InModuleScope ZwaveJsClient {
+            $p = ConvertFrom-SocketIoPacket -Packet '2'
+            $p.EioType | Should -Be '2'
+            $p.Event | Should -BeNullOrEmpty
+        }
+    }
+}

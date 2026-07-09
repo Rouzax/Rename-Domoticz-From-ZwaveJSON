@@ -49,4 +49,37 @@ function Split-EngineIoPayload {
     return , @($Body.Split([char]0x1e))
 }
 
+function ConvertFrom-SocketIoPacket {
+    <#
+    .SYNOPSIS
+        Parses one engine.io/socket.io packet (default namespace, no ack id).
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Packet)
+
+    $result = [pscustomobject]@{ EioType = $null; SioType = $null; Event = $null; Args = @() }
+    if ($Packet.Length -eq 0) { return $result }
+
+    $result.EioType = [string]$Packet[0]
+    if ($Packet[0] -ne '4' -or $Packet.Length -lt 2) { return $result }  # only engine.io MESSAGE carries socket.io
+
+    $result.SioType = [string]$Packet[1]
+    $rest = $Packet.Substring(2)
+    if ($rest.Length -eq 0) { return $result }
+
+    switch ($Packet[1]) {
+        '2' {   # EVENT: ["name", arg1, ...]
+            $arr = $rest | ConvertFrom-Json
+            if (@($arr).Count -ge 1) {
+                $result.Event = [string]@($arr)[0]
+                $result.Args = @($arr | Select-Object -Skip 1)
+            }
+        }
+        '0' { $result.Args = @(($rest | ConvertFrom-Json)) }  # CONNECT
+        '4' { $result.Args = @(($rest | ConvertFrom-Json)) }  # CONNECT_ERROR
+        default { }
+    }
+    return $result
+}
+
 Export-ModuleMember -Function Get-ZwaveJsNodes
