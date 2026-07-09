@@ -118,9 +118,18 @@ Describe 'Get-SocketIoConnectError' {
 
     It 'strips control characters from the server message' {
         InModuleScope ZwaveJsClient {
-            $packets = @(ConvertFrom-SocketIoPacket -Packet '44{"message":"bad[31mred"}')
+            $packets = @(ConvertFrom-SocketIoPacket -Packet '44{"message":"bad[31mred"}')
             $msg = Get-SocketIoConnectError -Packets $packets
-            $msg | Should -Not -Match "[`u{1b}`u{07}]"
+            $msg.Contains([char]0x1b) | Should -BeFalse
+            $msg | Should -Match 'red'
+        }
+    }
+
+    It 'caps the message length at 300 characters' {
+        InModuleScope ZwaveJsClient {
+            $long = 'x' * 500
+            $packets = @(ConvertFrom-SocketIoPacket -Packet ('44{"message":"' + $long + '"}'))
+            (Get-SocketIoConnectError -Packets $packets).Length | Should -BeLessOrEqual 300
         }
     }
 
