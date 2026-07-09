@@ -241,6 +241,15 @@ Device names are constructed using:
 * `Device Name` → From `name` in JSON.
 * `Property Label` → From `label` in JSON.
 
+#### Node-Level Devices (combined Temp+Humidity)
+
+Some multisensors expose temperature and humidity as separate Z-Wave values, but Domoticz merges them into a single **node-level** device (Domoticz Type 82 = Temp+Humidity, or Type 84 = Temp+Humidity+Baro) with a DeviceID like `{base}_node<id>` that has no individual Z-Wave value behind it. The tool renames these too:
+
+* Temp+Humidity / Temp+Humidity+Baro devices → `Room - Device - Climate`
+* any other node-level device → `Room - Device`
+
+This runs through the same dry-run, rules, and collision detection. To leave node-level devices untouched, add `-ExcludePattern 'node\d+$'`.
+
 #### Default Renaming Rules
 
 | ID Pattern | Original Label | New Label |

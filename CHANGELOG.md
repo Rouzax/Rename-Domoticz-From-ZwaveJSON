@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.9] - 2026-07-09
+
+**Node-level device renaming**: the tool now also renames the node-level device Domoticz creates for a node (for example the combined Temp+Humidity device it builds from a multisensor, Domoticz Type 82/84), which has no Z-Wave value behind it and was previously never matched. These become `{location} - {name} - Climate` for Temp+Humidity (and Temp+Humidity+Baro) devices, and `{location} - {name}` for any other node-level device. It runs through the normal dry-run, rules, and collision detection, and can be excluded with `-ExcludePattern 'node\d+$'`.
+
 ## [2.8.1] - 2026-07-09
 
 **`-ZwaveJsToken` over http**: the token is now allowed over `http://` with a cleartext warning instead of being refused. A zwave-js-ui instance is usually on a trusted LAN or localhost, so the previous https-only requirement was too strict. `https://` is still recommended on untrusted networks. The token stays in the connect payload and is never logged.

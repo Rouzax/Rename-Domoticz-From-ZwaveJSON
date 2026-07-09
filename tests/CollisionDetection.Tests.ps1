@@ -91,16 +91,21 @@ BeforeAll {
         'test_6-37-1-currentValue'                        = 'Zone Bravo - Lamp - Current value'          # pending, endpoint 1
         'test_6-37-2-currentValue'                        = 'Zone Bravo - Lamp - Current value'          # pending, endpoint 2
         'test_7-48-0-Any'                                 = 'Zone Charlie - PIR - Sensor state (Any)'    # clean rename
+        'test_node5'                                      = 'Zone Alpha-PIR'                             # node-level combined Temp+Hum device
     }
+
+    # Domoticz device Type per DeviceID (82 = Temp+Humidity). Others default to 0.
+    $script:DeviceTypes = @{ 'test_node5' = 82 }
 
     function New-TestDatabase {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Test helper writing a throwaway fixture database; nothing to confirm.')]
         param([Parameter(Mandatory)][string]$Path)
         $conn = Open-SqliteDatabase -Path $Path -CreateIfMissing
         try {
-            [void](Invoke-SqliteNonQuery -Connection $conn -Sql 'CREATE TABLE DeviceStatus (DeviceID TEXT, Name TEXT, SwitchType INTEGER, CustomImage INTEGER)')
+            [void](Invoke-SqliteNonQuery -Connection $conn -Sql 'CREATE TABLE DeviceStatus (DeviceID TEXT, Name TEXT, SwitchType INTEGER, CustomImage INTEGER, Type INTEGER)')
             foreach ($id in $script:OriginalNames.Keys) {
-                [void](Invoke-SqliteNonQuery -Connection $conn -Sql 'INSERT INTO DeviceStatus (DeviceID, Name, SwitchType, CustomImage) VALUES (@id, @name, 8, 0)' -Parameters @{ id = $id; name = $script:OriginalNames[$id] })
+                $type = if ($script:DeviceTypes.ContainsKey($id)) { $script:DeviceTypes[$id] } else { 0 }
+                [void](Invoke-SqliteNonQuery -Connection $conn -Sql 'INSERT INTO DeviceStatus (DeviceID, Name, SwitchType, CustomImage, Type) VALUES (@id, @name, 8, 0, @type)' -Parameters @{ id = $id; name = $script:OriginalNames[$id]; type = $type })
             }
         }
         finally { $conn.Close() }
@@ -162,6 +167,12 @@ Describe 'Collision detection against the end state' -Skip:(-not $EngineAvailabl
 
     It 'applies a rename that does not collide' {
         $script:Names['test_7-48-0-Any'] | Should -Be 'Zone Charlie - PIR - Motion (Binary)'
+    }
+
+    It 'renames a node-level Temp+Humidity device to "{loc} - {name} - Climate"' {
+        # test_node5 (Domoticz Type 82) has no Z-Wave value; it is renamed via the
+        # synthetic node-level target, with a Climate label for Temp+Humidity.
+        $script:Names['test_node5'] | Should -Be 'Zone Alpha - PIR - Climate'
     }
 
     It 'leaves no duplicate device names in the end state' {
