@@ -93,7 +93,8 @@ Describe 'Get-SocketIoEventArgs' {
     It 'finds an event among parsed packets' {
         InModuleScope ZwaveJsClient {
             $sep = [char]0x1e
-            $packets = @(Split-EngineIoPayload -Body ('40{"sid":"x"}' + $sep + '42["INITED",{"nodes":[{"id":7}]}]') | ForEach-Object { ConvertFrom-SocketIoPacket -Packet $_ })
+            $raw = Split-EngineIoPayload -Body ('40{"sid":"x"}' + $sep + '42["INITED",{"nodes":[{"id":7}]}]')
+            $packets = @(foreach ($p in $raw) { ConvertFrom-SocketIoPacket -Packet $p })
             $evtArgs = Get-SocketIoEventArgs -Packets $packets -Event 'INITED'
             $evtArgs[0].nodes[0].id | Should -Be 7
         }
