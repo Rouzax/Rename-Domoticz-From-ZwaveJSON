@@ -151,7 +151,12 @@ Describe 'Get-ZwaveJsNodes (integration)' -Skip:(-not $CanListen) {
         { Get-ZwaveJsNodes -Url 'http://localhost:1' -TimeoutSec 3 } | Should -Throw '*Could not reach zwave-js-ui*'
     }
 
-    It 'refuses to send a token over http' {
-        { Get-ZwaveJsNodes -Url 'http://localhost:1' -Token 'jwt' -TimeoutSec 3 } | Should -Throw '*non-https*'
+    It 'warns (but does not refuse) when sending a token over http' {
+        $warnings = @()
+        try {
+            Get-ZwaveJsNodes -Url 'http://localhost:1' -Token 'jwt' -TimeoutSec 2 -WarningVariable +warnings -WarningAction SilentlyContinue | Out-Null
+        }
+        catch { }  # connect fails on port 1; we only care that the token/http warning fired first
+        ($warnings -join ' ') | Should -Match 'cleartext'
     }
 }

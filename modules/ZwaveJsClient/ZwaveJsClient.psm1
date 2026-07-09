@@ -190,9 +190,11 @@ function Get-ZwaveJsNodes {
         default { throw "zwave-js-ui URL must be http:// or https:// ($Url)." }
     }
 
-    # The token is a secret: never send it over a non-TLS channel.
+    # The token is a credential. Over http it travels in cleartext, which is
+    # usually fine on a trusted LAN (the common case) but risky on an open
+    # network, so warn rather than refuse.
     if ($Token -and $wsScheme -eq 'ws') {
-        throw "Refusing to send -ZwaveJsToken over a non-https URL ($Url). Use an https:// zwave-js-ui URL so the token is not transmitted in cleartext."
+        Write-Warning "Sending -ZwaveJsToken to $Url over http: the token is transmitted in cleartext. Fine on a trusted LAN; use https:// if the traffic could be observed."
     }
     if ($Token -and $SkipCertificateCheck) {
         Write-Warning "-SkipCertificateCheck disables TLS validation; a token sent to an unverified server can be intercepted."

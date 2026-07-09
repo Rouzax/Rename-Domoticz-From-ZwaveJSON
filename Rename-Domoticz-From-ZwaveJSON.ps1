@@ -34,9 +34,9 @@
     API. Mandatory: one of -JsonFile or -ZwaveJsUrl.
 
 .PARAMETER ZwaveJsToken
-    Optional auth token for a zwave-js-ui with authentication enabled.
-    Requires an https URL (refused over http). Prefer passing via an
-    environment variable rather than inline.
+    Optional auth token for a zwave-js-ui with authentication enabled. Over http
+    it is sent in cleartext (allowed, with a warning); prefer https on untrusted
+    networks. Prefer passing via an environment variable rather than inline.
 
 .PARAMETER SkipCertificateCheck
     Skip TLS validation for a self-signed https zwave-js-ui.
@@ -123,7 +123,7 @@ param (
     [string]$ZwaveJsUrl,
 
     [Parameter(ParameterSetName = 'FromZwaveJs',
-        HelpMessage = "Auth token if zwave-js-ui has authentication enabled (requires an https URL). Prefer passing via an environment variable, not inline.")]
+        HelpMessage = "Auth token if zwave-js-ui has authentication enabled. Over http it is sent in cleartext (allowed, with a warning). Prefer passing via an environment variable, not inline.")]
     [string]$ZwaveJsToken,
 
     [Parameter(ParameterSetName = 'FromZwaveJs',

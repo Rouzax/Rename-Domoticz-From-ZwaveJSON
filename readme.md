@@ -97,13 +97,15 @@ socket.io API (read-only; nothing in zwave-js-ui is modified):
 ```
 
 - Default zwave-js-ui port is `8091`.
-- **Authentication:** if your instance requires login, pass `-ZwaveJsToken`. The
-  token is a credential, so it is **only accepted over `https://`** (the script
-  refuses to send it over `http://`). Pass it via an environment variable, not
-  inline, to keep it out of shell history and the process argument list, e.g.:
+- **Authentication:** if your instance requires login, pass `-ZwaveJsToken`.
+  The token is a credential. Over `http://` it is sent in cleartext, which is
+  normally fine on a trusted LAN (or localhost); the script allows it but prints
+  a warning. Prefer `https://` if the traffic could be observed. Pass the token
+  via an environment variable, not inline, to keep it out of shell history and
+  the process argument list, e.g.:
 
   ```powershell
-  .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "https://your-host:8091" -ZwaveJsToken $env:ZWAVEJS_TOKEN -DbPath "domoticz.db" -DryRun
+  .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "http://your-host:8091" -ZwaveJsToken $env:ZWAVEJS_TOKEN -DbPath "domoticz.db" -DryRun
   ```
 
   Obtain a token by logging into zwave-js-ui and copying its JWT. The script
@@ -144,7 +146,7 @@ socket.io API (read-only; nothing in zwave-js-ui is modified):
 | `-DryRun` | Preview changes without modifying database | `$false` |
 | `-Force` | Skip confirmation prompts | `$false` |
 | `-NoBackup` | Skip database backup (use with caution) | `$false` |
-| `-ZwaveJsToken` | Auth token, only if your zwave-js-ui has authentication enabled. Requires an `https://` URL (refused over http) | None |
+| `-ZwaveJsToken` | Auth token, only if your zwave-js-ui has authentication enabled. Over `http://` it is sent in cleartext (allowed, with a warning); prefer `https://` on untrusted networks | None |
 | `-SkipCertificateCheck` | Skip TLS validation for a self-signed https zwave-js-ui | `$false` |
 
 ---
