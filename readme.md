@@ -4,9 +4,31 @@ Automatically rename your Domoticz devices based on the room and device names co
 
 **The problem:** When Z-Wave JS creates devices in Domoticz via MQTT Auto-Discovery, they get generic names like `zwavejs2mqtt_0xc15d8aa6_42-49-0-Air_temperature`. Finding the right device becomes a nightmare.
 
-**The solution:** This script reads your Z-Wave JS export and renames devices to friendly names like `Living Room - Motion Sensor - Motion`, matching your Z-Wave JS configuration. It can also fix device types (so smoke detectors get a Reset button, motion sensors show the right icon, etc.).
+**The solution:** This script reads your Z-Wave JS node data, either from a JSON export or directly from a running zwave-js-ui instance, and renames devices to friendly names like `Living Room - Motion Sensor - Motion`, matching your Z-Wave JS configuration. It can also fix device types (so smoke detectors get a Reset button, motion sensors show the right icon, etc.).
 
 <img width="987" height="830" alt="image" src="https://github.com/user-attachments/assets/5cba8a2c-f18f-4c16-8404-54a58ab996e0" />
+
+---
+
+## 🚀 Quick Start
+
+1. **Run setup once per machine** to download the required SQLite assemblies:
+
+   ```powershell
+   pwsh ./setup.ps1
+   ```
+
+2. **Preview the changes** without touching the database:
+
+   ```powershell
+   .\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db" -DryRun
+   ```
+
+3. **Review the HTML report**, then apply the changes for real:
+
+   ```powershell
+   .\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db"
+   ```
 
 ---
 
@@ -16,10 +38,10 @@ This script modifies the **Domoticz database** directly. While it includes safet
 
 **Before running:**
 
-1. **Stop Domoticz before applying changes** — Domoticz caches device rows in memory and periodically writes them back, so it can overwrite your renames while it runs, and new names only appear after a restart anyway. `-DryRun` is safe to run at any time. The script warns you (cross-platform) if the database is still in use, but you should stop Domoticz regardless.
-2. **Test with `-DryRun` first** — Preview changes without modifying anything
-3. **Let it create a backup** — The script automatically backs up your database
-4. **Review the HTML report** — Check the changes look correct before running live
+1. **Stop Domoticz before applying changes:** Domoticz caches device rows in memory and periodically writes them back, so it can overwrite your renames while it runs, and new names only appear after a restart anyway. `-DryRun` is safe to run at any time. The script warns you (cross-platform) if the database is still in use, but you should stop Domoticz regardless.
+2. **Test with `-DryRun` first:** Preview changes without modifying anything
+3. **Let it create a backup:** The script automatically backs up your database
+4. **Review the HTML report:** Check the changes look correct before running live
 
 ---
 
@@ -127,51 +149,154 @@ socket.io API (read-only; nothing in zwave-js-ui is modified):
 
 ---
 
-## 🆕 New Features in v2.0
+## Features
 
 ### 🔍 DryRun Mode
 
-Preview all changes without modifying the database:
+Preview all changes without modifying the database. See Quick Start above for an example.
+
+### 🚫 Device Exclusions
+
+Exclude specific devices by ID:
 
 ```powershell
-.\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db" -DryRun
+.\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db" `
+    -ExcludeDeviceIds @("zwavejs2mqtt_xxx_42-49-0-Air_temperature", "zwavejs2mqtt_xxx_50-1-value-66049")
 ```
 
-### 📂 Auto-Loading Rules
+Exclude devices matching a pattern:
 
-The repository includes a `rename_rules.json` with 29 rules covering common Z-Wave device types (smoke detectors, motion sensors, door contacts, battery alerts, etc.), including `switchType` and `customImage` settings.
-
-When you run the script from the repository directory and don't specify `-RulesFile`, this file is loaded automatically. If you download only the `.ps1` file, the script falls back to 7 built-in rules that cover basic label shortening.
-
-To customize, copy `rename_rules.json`, edit it, and either keep it next to the script (auto-loaded) or point to it with `-RulesFile`.
-
-### 📋 Custom Renaming Rules
-
-Create a JSON file with your own renaming rules:
-
-```json
-{
-  "rules": [
-    {
-      "name": "Shorten Humidity Label",
-      "pattern": "49-0-Humidity$",
-      "replace": " - Humidity$",
-      "with": " - RH%",
-      "description": "Shortens humidity sensor label"
-    }
-  ]
-}
+```powershell
+.\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db" `
+    -ExcludePattern "test_.*|debug_.*"
 ```
 
-Then use it:
+### ⚠️ Name Collision Detection
+
+The script detects when a rename would collide with **any** device in the final state, including devices that keep their current name, not just clashes between two proposed renames. Collisions on different endpoints are auto-resolved by appending the endpoint number (e.g. ` - EP2`, ` - EP3`). Collisions on the same endpoint (or against a device that keeps its name) are reported and skipped, so the script never writes a duplicate name.
+
+### ↩️ Undo Script Generation
+
+An SQL undo script is automatically generated, allowing you to revert changes:
+
+```bash
+sqlite3 domoticz.db < undo_rename-25.01.30-14.30.45.sql
+```
+
+### 🌐 HTML Report
+
+An interactive HTML report is generated by default in the database folder. The report features:
+
+- Expandable device cards with change details
+- Search and filter functionality
+- Color-coded badges for Name, SwitchType, and CustomImage changes
+- Human-readable descriptions for switch types and icons
+
+To specify a custom path:
+
+```powershell
+.\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db" `
+    -HtmlReport "D:\Reports\rename_report.html"
+```
+
+### 🔒 Database Usage Detection
+
+Before making changes, the script checks whether another process (typically a running Domoticz) has the database open, and warns you with the process name. This check is **cross-platform**:
+
+- **Linux** (incl. Raspberry Pi): scans `/proc` for a process holding the DB or its `-wal`/`-journal` files open (no extra tools needed).
+- **Windows**: attempts an exclusive open.
+- **macOS**: uses `lsof` when available.
+
+It is best-effort, not a guarantee: SQLite locks are transient, and on Linux it can only see handles owned by processes visible to the current user. **Always stop Domoticz before applying changes** (see above).
+
+### ⏱️ Progress Bar with ETA
+
+Progress display includes estimated time remaining.
+
+### 📊 Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Error |
+| 2 | No changes needed |
+| 3 | Partial success (some errors occurred) |
+| 4 | User cancelled |
+
+---
+
+## 🗝️ Renaming Rules
+
+### Naming Scheme
+
+Device names are constructed using:
+
+```
+[Room Name] - [Device Name] - [Property Label]
+```
+
+* `Room Name` → From `loc` in JSON.
+* `Device Name` → From `name` in JSON.
+* `Property Label` → From `label` in JSON.
+
+#### Default Renaming Rules
+
+| ID Pattern | Original Label | New Label |
+|------------|----------------|-----------|
+| `38-[01]-currentValue` | `Current Value` | *(removed)* |
+| `37-[01]-currentValue` | `Current Value` | *(removed)* |
+| `50-[01]-value-66049` | `Electric Consumption [W]` | `[W]` |
+| `50-[01]-value-65537` | `Electric Consumption [kWh]` | `[kWh]` |
+| `49-0-Air_temperature` | `Air temperature` | `Temp` |
+| `49-0-Illuminance` | `Illuminance` | `Lux` |
+| `113-0-Home_Security-Motion_sensor_status` | `Motion sensor status` | `Motion` |
+
+#### Special Behaviors
+
+1. **Preserve `$` Prefix:** If the old name starts with `$`, the new name also starts with `$`.
+2. **DeviceID Spaces → Underscores:** Domoticz replaces spaces with underscores in `DeviceID`.
+3. **DeviceID Slashes → Hyphens:** Domoticz replaces forward slashes with hyphens in `DeviceID`.
+
+### Bundled and Custom Rules
+
+The repository includes a `rename_rules.json` with 38 rules covering common Z-Wave device types (smoke detectors, motion sensors, door contacts, battery alerts, etc.), including `switchType` and `customImage` settings.
+
+When you run the script from the repository directory and don't specify `-RulesFile`, this file is loaded automatically. If you download only the `.ps1` file, the script falls back to a small set of built-in rules that cover basic label shortening.
+
+To customize, copy `rename_rules.json`, edit it, and either keep it next to the script (auto-loaded) or point to it with `-RulesFile`:
 
 ```powershell
 .\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db" -RulesFile "my_rules.json"
 ```
 
-### 🔧 Setting Device Types (v2.1+)
+### Rule JSON Schema
 
-Rules can optionally set `switchType` and `customImage` to configure the correct Domoticz device type:
+```json
+{
+  "rules": [
+    {
+      "name": "Rule display name",
+      "pattern": "regex pattern to match DeviceID$",
+      "replace": "regex pattern to match in device name$",
+      "with": "replacement string",
+      "nodeMatch": { "productLabel": "regex to match product label" },
+      "description": "Optional description"
+    }
+  ]
+}
+```
+
+### How Rules Work
+
+1. Rules are processed in order; the first matching rule wins.
+2. `pattern` is matched against the **DeviceID**.
+3. `replace` is matched against the **device name**; the matched text is replaced with `with`.
+4. `nodeMatch` (optional) is an object of regex patterns matched against Z-Wave node properties: `productLabel`, `productDescription`, `manufacturer`. **All** specified properties must match for the rule to apply. Rules without `nodeMatch` apply to all devices.
+5. `switchType` (optional) sets the Domoticz SwitchType (see reference table below).
+6. `customImage` (optional) sets the Domoticz CustomImage icon (see reference table below).
+7. Use `\\[` and `\\]` to escape brackets in JSON.
+
+Example rules that set `switchType` to configure the correct Domoticz device type:
 
 ```json
 {
@@ -225,6 +350,7 @@ You can also set `customImage` to change the device icon:
 ```
 
 Common built-in icons (values may vary by Domoticz version):
+
 | Value | Icon |
 |-------|------|
 | 0 | Default for SwitchType |
@@ -233,105 +359,51 @@ Common built-in icons (values may vary by Domoticz version):
 
 To find icon values in your Domoticz: query `SELECT DISTINCT CustomImage, Name FROM DeviceStatus WHERE CustomImage > 0;`
 
-### 🚫 Device Exclusions
+### Endpoint Pattern Reference
 
-Exclude specific devices by ID:
+Z-Wave devices use endpoints to distinguish channels. The endpoint number appears in the DeviceID (e.g., `37-0-currentValue`, `37-1-currentValue`, `37-2-currentValue`).
 
-```powershell
-.\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db" `
-    -ExcludeDeviceIds @("zwavejs2mqtt_xxx_42-49-0-Air_temperature", "zwavejs2mqtt_xxx_50-1-value-66049")
+| Pattern | Matches | Use Case |
+|---------|---------|----------|
+| `[01]` | Endpoint 0 or 1 | Primary channel(s) only - **default** |
+| `\\d+` | Any endpoint | All channels (may cause collisions on multi-channel devices) |
+| `0` | Endpoint 0 only | Single-endpoint devices only |
+| `1` | Endpoint 1 only | First channel of multi-endpoint devices |
+| `[012]` | Endpoints 0, 1, or 2 | First three channels |
+
+### Customization Examples
+
+**Remove suffix from ALL endpoints** (use with caution - may cause name collisions):
+```json
+{
+  "pattern": "37-\\d+-currentValue$",
+  "replace": " - Current value$",
+  "with": ""
+}
 ```
 
-Exclude devices matching a pattern:
-
-```powershell
-.\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db" `
-    -ExcludePattern "test_.*|debug_.*"
+**Remove suffix from endpoint 0 only**:
+```json
+{
+  "pattern": "37-0-currentValue$",
+  "replace": " - Current value$",
+  "with": ""
+}
 ```
 
-### ⚠️ Name Collision Detection
-
-The script detects when a rename would collide with **any** device in the final state, including devices that keep their current name, not just clashes between two proposed renames. Collisions on different endpoints are auto-resolved by appending the endpoint number (e.g. ` - EP2`, ` - EP3`). Collisions on the same endpoint (or against a device that keeps its name) are reported and skipped, so the script never writes a duplicate name.
-
-### ↩️ Undo Script Generation
-
-An SQL undo script is automatically generated, allowing you to revert changes:
-
-```bash
-sqlite3 domoticz.db < undo_rename-25.01.30-14.30.45.sql
+**Scope a rule to a specific device type** (e.g., RGBW controller only):
+```json
+{
+  "name": "RGBW Red Channel",
+  "pattern": "38-2-currentValue$",
+  "replace": " - Current value$",
+  "with": " - Red",
+  "nodeMatch": { "productLabel": "FGRGBW" },
+  "description": "Only matches Fibaro RGBW controllers, not regular dimmers"
+}
 ```
 
-### 🌐 HTML Report
-
-An interactive HTML report is now **generated by default** in the database folder. The report features:
-
-- Expandable device cards with change details
-- Search and filter functionality
-- Color-coded badges for Name, SwitchType, and CustomImage changes
-- Human-readable descriptions for switch types and icons
-
-To specify a custom path:
-
-```powershell
-.\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db" `
-    -HtmlReport "D:\Reports\rename_report.html"
-```
-
-### 🔒 Database Usage Detection
-
-Before making changes, the script checks whether another process (typically a running Domoticz) has the database open, and warns you with the process name. This check is **cross-platform**:
-
-- **Linux** (incl. Raspberry Pi): scans `/proc` for a process holding the DB or its `-wal`/`-journal` files open (no extra tools needed).
-- **Windows**: attempts an exclusive open.
-- **macOS**: uses `lsof` when available.
-
-It is best-effort, not a guarantee: SQLite locks are transient, and on Linux it can only see handles owned by processes visible to the current user. **Always stop Domoticz before applying changes** (see below).
-
-### ⏱️ Progress Bar with ETA
-
-Progress display now includes estimated time remaining.
-
-### 📊 Exit Codes
-
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | Error |
-| 2 | No changes needed |
-| 3 | Partial success (some errors occurred) |
-| 4 | User cancelled |
-
----
-
-## 🗝️ Naming Scheme
-
-Device names are constructed using:
-
-```
-[Room Name] - [Device Name] - [Property Label]
-```
-
-* `Room Name` → From `loc` in JSON.
-* `Device Name` → From `name` in JSON.
-* `Property Label` → From `label` in JSON.
-
-### 🔄 Default Renaming Rules
-
-| ID Pattern | Original Label | New Label |
-|------------|----------------|-----------|
-| `38-[01]-currentValue` | `Current Value` | *(removed)* |
-| `37-[01]-currentValue` | `Current Value` | *(removed)* |
-| `50-[01]-value-66049` | `Electric Consumption [W]` | `[W]` |
-| `50-[01]-value-65537` | `Electric Consumption [kWh]` | `[kWh]` |
-| `49-0-Air_temperature` | `Air temperature` | `Temp` |
-| `49-0-Illuminance` | `Illuminance` | `Lux` |
-| `113-0-Home_Security-Motion_sensor_status` | `Motion sensor status` | `Motion` |
-
-### Special Behaviors
-
-1. **Preserve `$` Prefix** — If the old name starts with `$`, the new name also starts with `$`.
-2. **DeviceID Spaces → Underscores** — Domoticz replaces spaces with underscores in `DeviceID`.
-3. **DeviceID Slashes → Hyphens** — Domoticz replaces forward slashes with hyphens in `DeviceID`.
+Without `nodeMatch`, this rule would match endpoint 2 on every device with CC38 (dimmers, blinds, etc.). The `nodeMatch` field restricts it to nodes whose `productLabel` matches the regex `FGRGBW`.
 
 ---
 
@@ -469,8 +541,8 @@ sqlite3 C:\Domoticz\domoticz.db < C:\Domoticz\undo_rename-25.01.30-14.30.45.sql
 | **"SQLite engine unavailable"** | Run `pwsh ./setup.ps1` to download the SQLite assemblies into `lib/` |
 | **"No native SQLite for '<rid>'"** | Your platform is not in the pinned native package; open an issue with the reported runtime identifier |
 | **"Database is open by ..."** | Stop Domoticz before applying changes (it can overwrite renames from its in-memory cache); `-DryRun` is always safe |
-| **"DeviceID not found"** | Check that JSON IDs match Domoticz DB IDs (spaces → underscores) |
-| **"Base Identifier not found"** | Verify your JSON export has `identifiers` under `hassDevices` |
+| **"DeviceID not found"** | Check that JSON IDs match Domoticz DB IDs (spaces → underscores). In live mode (`-ZwaveJsUrl`), this usually means Hass/MQTT discovery is not enabled in zwave-js-ui |
+| **"Base Identifier not found"** | Verify your JSON export has `identifiers` under `hassDevices`. In live mode (`-ZwaveJsUrl`), this means Hass/MQTT discovery must be enabled in zwave-js-ui, since the base identifier comes from the discovery payload |
 | **"Name collision detected"** | Multi-endpoint collisions are auto-resolved with endpoint numbers; unresolvable collisions are skipped |
 | **Logs/CSV not where expected** | Check console output for actual paths; falls back: Script → DB → TEMP |
 
@@ -482,8 +554,10 @@ sqlite3 C:\Domoticz\domoticz.db < C:\Domoticz\undo_rename-25.01.30-14.30.45.sql
 ├── Rename-Domoticz-From-ZwaveJSON.ps1   # Main script
 ├── setup.ps1                             # One-time: fetch pinned SQLite assemblies into lib/
 ├── rename_rules.json                     # Extended renaming rules (auto-loaded when present)
-├── README.md                             # This documentation
+├── readme.md                              # This documentation
+├── CHANGELOG.md                          # Version history
 ├── modules/DomoticzSqlite/               # SQLite data-access module (Microsoft.Data.Sqlite)
+├── modules/ZwaveJsClient/                # Live zwave-js-ui reader (socket.io / engine.io v4)
 ├── tests/                                # Pester tests (Invoke-Pester -Path ./tests)
 ├── lib/                                  # SQLite assemblies (git-ignored; created by setup.ps1)
 │
@@ -499,94 +573,11 @@ sqlite3 C:\Domoticz\domoticz.db < C:\Domoticz\undo_rename-25.01.30-14.30.45.sql
 
 ---
 
-## 🔧 Custom Rules JSON Schema
+## 📜 Changelog
 
-```json
-{
-  "rules": [
-    {
-      "name": "Rule display name",
-      "pattern": "regex pattern to match DeviceID$",
-      "replace": "regex pattern to match in device name$",
-      "with": "replacement string",
-      "nodeMatch": { "productLabel": "regex to match product label" },
-      "description": "Optional description"
-    }
-  ]
-}
-```
-
-### Rules Processing
-
-1. Rules are processed in order; first matching rule wins.
-2. If `nodeMatch` is specified, the rule only applies when **all** specified node properties match their regex patterns. Available properties: `productLabel`, `productDescription`, `manufacturer`. Rules without `nodeMatch` apply to all devices.
-3. `pattern` is matched against the **DeviceID**.
-4. `replace` is matched against the **device name**.
-5. Use `\\[` and `\\]` to escape brackets in JSON.
-
-### Endpoint Pattern Reference
-
-Z-Wave devices use endpoints to distinguish channels. The endpoint number appears in the DeviceID (e.g., `37-0-currentValue`, `37-1-currentValue`, `37-2-currentValue`).
-
-| Pattern | Matches | Use Case |
-|---------|---------|----------|
-| `[01]` | Endpoint 0 or 1 | Primary channel(s) only - **default** |
-| `\\d+` | Any endpoint | All channels (may cause collisions on multi-channel devices) |
-| `0` | Endpoint 0 only | Single-endpoint devices only |
-| `1` | Endpoint 1 only | First channel of multi-endpoint devices |
-| `[012]` | Endpoints 0, 1, or 2 | First three channels |
-
-### Customization Examples
-
-**Remove suffix from ALL endpoints** (use with caution - may cause name collisions):
-```json
-{
-  "pattern": "37-\\d+-currentValue$",
-  "replace": " - Current value$",
-  "with": ""
-}
-```
-
-**Remove suffix from endpoint 0 only**:
-```json
-{
-  "pattern": "37-0-currentValue$",
-  "replace": " - Current value$",
-  "with": ""
-}
-```
-
-**Scope a rule to a specific device type** (e.g., RGBW controller only):
-```json
-{
-  "name": "RGBW Red Channel",
-  "pattern": "38-2-currentValue$",
-  "replace": " - Current value$",
-  "with": " - Red",
-  "nodeMatch": { "productLabel": "FGRGBW" },
-  "description": "Only matches Fibaro RGBW controllers, not regular dimmers"
-}
-```
-
-Without `nodeMatch`, this rule would match endpoint 2 on every device with CC38 (dimmers, blinds, etc.). The `nodeMatch` field restricts it to nodes whose `productLabel` matches the regex `FGRGBW`.
-
----
-
-## 📜 Version History
-
-| Version | Changes |
-|---------|---------|
-| 2.8 | **Read directly from zwave-js-ui**: new `-ZwaveJsUrl` mode fetches node data live over zwave-js-ui's socket.io API (engine.io v4 WebSocket, no dependency), so a manual `nodes_dump.json` export is no longer required. `-ZwaveJsToken` supports authenticated instances (https only); `-SkipCertificateCheck` for self-signed HTTPS. Read-only; the fetch runs before any backup so a failure changes nothing |
-| 2.7 | **ARM / Raspberry Pi support**: replaced the PSSQLite module with Microsoft.Data.Sqlite + SQLitePCLRaw, provisioned by a new pinned, checksum-verified `setup.ps1` that selects the native SQLite for your platform (`linux-arm64`, `linux-arm`, `linux-x64`, `win-x64`, `osx-arm64`, ...). Extracted the data layer into a `DomoticzSqlite` module with Pester tests. **Cross-platform database-in-use detection** (Linux `/proc` scan, Windows exclusive-open, macOS `lsof`) replaces the previous Windows-only lock check and names the holding process. **Collision detection** now checks a proposed name against the full end state (including devices that keep their name), so it can no longer silently create a duplicate |
-| 2.6 | **Node-scoped rules**: New optional `nodeMatch` field lets rules target specific device types by matching Z-Wave node properties (`productLabel`, `productDescription`, `manufacturer`). Added RGBW color channel rules for Fibaro FGRGBW-442 using `nodeMatch` to avoid affecting regular dimmers |
-| 2.5 | **UX improvements**: Summary box fields now display in consistent order. Log file defaults to DB folder with timestamp (matching other output files). Malformed rules files now error instead of silently falling back to defaults. `rename_rules.json` is auto-loaded from script directory when present (29 rules vs 7 built-in). Exit code now considers TypeChanged/ImageChanged. Removed non-actionable "Missing" count from summary. Consolidated MISSING log entries into one summary line. Confirmation prompt now shows actual change counts after analysis |
-| 2.4 | **Collision auto-resolution**: Multi-endpoint collisions are now resolved automatically by appending endpoint numbers (EP2, EP3, etc.) instead of being skipped. **Robustness fixes**: Cross-platform temp directory support (Linux/macOS), removed WhatIf parameter (use DryRun instead), early ExcludePattern regex validation, transaction failure reporting, explicit error handling on all database calls |
-| 2.3 | **HTML report now default**: Interactive HTML report generated automatically in DB folder. **CSV now optional**: Only generated when `-CsvFile` is specified. **Improved HTML readability**: Device cards now show sensor type suffix (e.g., "› Heat Alarm") for easy identification; human-readable SwitchType/CustomImage descriptions; search and filter functionality |
-| 2.2 | **ImageChanged tracking**: Now shows CustomImage changes separately in stats and reports |
-| 2.1 | **SwitchType/CustomImage support**: Rules can now optionally set `switchType` and `customImage` to configure correct device types (e.g., Smoke Detector with Reset button, Motion Sensor, Door Contact) |
-| 2.0 | Major rewrite: DryRun mode, external rules config, exclusions, collision detection, undo scripts, HTML reports, ETA progress, exit codes, database lock detection, backup verification |
-| 1.7 | Atomic transactions, fallback paths, whitespace normalization |
-| 1.0 | Initial release |
+See [CHANGELOG.md](CHANGELOG.md) for the full version history, or the
+[GitHub Releases page](https://github.com/Rouzax/Rename-Domoticz-From-ZwaveJSON/releases)
+for release notes.
 
 ---
 
