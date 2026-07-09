@@ -88,3 +88,45 @@ Describe 'ConvertFrom-SocketIoPacket' {
         }
     }
 }
+
+Describe 'Get-SocketIoEventArgs' {
+    It 'finds an event among parsed packets' {
+        InModuleScope ZwaveJsClient {
+            $sep = [char]0x1e
+            $packets = @(Split-EngineIoPayload -Body ('40{"sid":"x"}' + $sep + '42["INITED",{"nodes":[{"id":7}]}]') | ForEach-Object { ConvertFrom-SocketIoPacket -Packet $_ })
+            $evtArgs = Get-SocketIoEventArgs -Packets $packets -Event 'INITED'
+            $evtArgs[0].nodes[0].id | Should -Be 7
+        }
+    }
+
+    It 'returns null when the event is absent' {
+        InModuleScope ZwaveJsClient {
+            $packets = @(ConvertFrom-SocketIoPacket -Packet '40{"sid":"x"}')
+            Get-SocketIoEventArgs -Packets $packets -Event 'INITED' | Should -BeNullOrEmpty
+        }
+    }
+}
+
+Describe 'Get-SocketIoConnectError' {
+    It 'returns the message from a CONNECT_ERROR packet' {
+        InModuleScope ZwaveJsClient {
+            $packets = @(ConvertFrom-SocketIoPacket -Packet '44{"message":"Authentication failed"}')
+            Get-SocketIoConnectError -Packets $packets | Should -Be 'Authentication failed'
+        }
+    }
+
+    It 'strips control characters from the server message' {
+        InModuleScope ZwaveJsClient {
+            $packets = @(ConvertFrom-SocketIoPacket -Packet '44{"message":"bad[31mred"}')
+            $msg = Get-SocketIoConnectError -Packets $packets
+            $msg | Should -Not -Match "[`u{1b}`u{07}]"
+        }
+    }
+
+    It 'returns null when there is no connect error' {
+        InModuleScope ZwaveJsClient {
+            $packets = @(ConvertFrom-SocketIoPacket -Packet '40{"sid":"x"}')
+            Get-SocketIoConnectError -Packets $packets | Should -BeNullOrEmpty
+        }
+    }
+}

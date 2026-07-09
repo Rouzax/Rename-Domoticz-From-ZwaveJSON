@@ -82,4 +82,53 @@ function ConvertFrom-SocketIoPacket {
     return $result
 }
 
+function Get-SafeServerString {
+    <#
+    .SYNOPSIS
+        Sanitizes an untrusted server-supplied string for printing (strips
+        control/escape characters, caps length).
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Value)
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    $clean = $Value -replace '[\x00-\x1f\x7f]', ' '
+    if ($clean.Length -gt 300) { $clean = $clean.Substring(0, 300) }
+    return $clean.Trim()
+}
+
+function Get-SocketIoEventArgs {
+    <#
+    .SYNOPSIS
+        Returns the args of the first matching socket.io EVENT among parsed packets.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Packets,
+        [Parameter(Mandatory)][string]$Event
+    )
+    foreach ($parsed in $Packets) {
+        if ($parsed.Event -eq $Event) { return , $parsed.Args }
+    }
+    return $null
+}
+
+function Get-SocketIoConnectError {
+    <#
+    .SYNOPSIS
+        Returns the sanitized CONNECT_ERROR message among parsed packets, or $null.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Packets)
+
+    foreach ($parsed in $Packets) {
+        if ($parsed.EioType -eq '4' -and $parsed.SioType -eq '4') {
+            $obj = @($parsed.Args)[0]
+            if ($null -ne $obj -and 'message' -in $obj.PSObject.Properties.Name) {
+                return Get-SafeServerString ([string]$obj.message)
+            }
+            return 'connection rejected'
+        }
+    }
+    return $null
+}
+
 Export-ModuleMember -Function Get-ZwaveJsNodes
