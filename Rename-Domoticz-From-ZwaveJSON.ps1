@@ -1670,7 +1670,9 @@ Write-Host ""
 # Calculate total items for progress
 $total = 0
 foreach ($d in $ZwaveData) {
-    if ($d.values) {
+    # StrictMode-safe: some nodes (e.g. the controller) omit 'values' entirely
+    # in a live zwave-js-ui state, unlike a JSON dump which includes an empty array.
+    if ($d.PSObject.Properties['values'] -and $d.values) {
         $total += [int]$d.values.Count
     }
 }

@@ -5,8 +5,13 @@
 
     The manual nodes_dump.json export is just the frontend's node list. That
     list is delivered over zwave-js-ui's socket.io API. This module fetches it
-    with engine.io v4 HTTP long-polling (no WebSocket, no dependency) and
-    returns the same node array shape the dump has.
+    over a WebSocket (engine.io v4) and returns the same node array shape the
+    dump has.
+
+    WebSocket, not HTTP long-polling: the full node state is several MB (well
+    over the 1 MB engine.io polling maxPayload), so it only travels over the
+    WebSocket transport. The request is a single socket.io emit of the event
+    named 'INITED' (with an ack), and the state comes back as the ack payload.
 
     Only Get-ZwaveJsNodes is public. The parsing helpers are internal and
     covered by tests via InModuleScope.
@@ -36,23 +41,14 @@ function ConvertFrom-EngineIoOpen {
     }
 }
 
-function Split-EngineIoPayload {
-    <#
-    .SYNOPSIS
-        Splits an engine.io v4 polling body into individual packets.
-    #>
-    [CmdletBinding()]
-    param([Parameter(Mandatory)][AllowEmptyString()][string]$Body)
-
-    if ($Body.Length -eq 0) { return , @() }
-    # EIO4 polling separates packets with the record separator U+001E.
-    return , @($Body.Split([char]0x1e))
-}
-
 function ConvertFrom-SocketIoPacket {
     <#
     .SYNOPSIS
-        Parses one engine.io/socket.io packet (default namespace, no ack id).
+        Parses one engine.io/socket.io packet (default namespace).
+    .DESCRIPTION
+        Handles EVENT (42[...]), CONNECT (40{...}), CONNECT_ERROR (44{...}) and
+        ACK (43<ackid>[...]). For ACK, Args holds the ack payload; the leading
+        ack id digits are stripped before JSON parsing.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Packet)
@@ -75,6 +71,10 @@ function ConvertFrom-SocketIoPacket {
                 $result.Args = @($arr | Select-Object -Skip 1)
             }
         }
+        '3' {   # ACK: <ackid>[arg1, ...]
+            $body = $rest.TrimStart('0', '1', '2', '3', '4', '5', '6', '7', '8', '9')
+            if ($body.Length -gt 0) { $result.Args = @(($body | ConvertFrom-Json)) }
+        }
         '0' { $result.Args = @(($rest | ConvertFrom-Json)) }  # CONNECT
         '4' { $result.Args = @(($rest | ConvertFrom-Json)) }  # CONNECT_ERROR
         default { }
@@ -88,27 +88,11 @@ function Get-SafeServerString {
         Sanitizes an untrusted server-supplied string for printing (strips
         control/escape characters, caps length).
     #>
-    param([AllowEmptyString()][AllowNull()][string]$Value)
+    param([AllowEmptyString()][string]$Value)
     if ([string]::IsNullOrEmpty($Value)) { return $Value }
     $clean = $Value -replace '[\x00-\x1f\x7f]', ' '
     if ($clean.Length -gt 300) { $clean = $clean.Substring(0, 300) }
     return $clean.Trim()
-}
-
-function Get-SocketIoEventArgs {
-    <#
-    .SYNOPSIS
-        Returns the args of the first matching socket.io EVENT among parsed packets.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Packets,
-        [Parameter(Mandatory)][string]$Event
-    )
-    foreach ($parsed in $Packets) {
-        if ($parsed.Event -eq $Event) { return , $parsed.Args }
-    }
-    return $null
 }
 
 function Get-SocketIoConnectError {
@@ -131,137 +115,171 @@ function Get-SocketIoConnectError {
     return $null
 }
 
-function Invoke-EngineIoRequest {
+function Send-WsText {
     <#
     .SYNOPSIS
-        One engine.io polling HTTP request. Returns the raw response body string.
+        Sends one UTF-8 text frame on a WebSocket.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][ValidateSet('GET', 'POST')][string]$Method,
-        [Parameter(Mandatory)][string]$Uri,
-        [string]$Body,
-        [switch]$SkipCertificateCheck,
-        [int]$TimeoutSec = 10,
-        [int]$MaxBytes = 25MB
+        [Parameter(Mandatory)]$WebSocket,
+        [Parameter(Mandatory)][string]$Text,
+        [Parameter(Mandatory)]$CancellationToken
     )
-    $p = @{ Method = $Method; Uri = $Uri; TimeoutSec = $TimeoutSec }
-    if ($SkipCertificateCheck) { $p.SkipCertificateCheck = $true }
-    if ($PSBoundParameters.ContainsKey('Body')) {
-        $p.Body = $Body
-        $p.ContentType = 'text/plain;charset=UTF-8'
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+    $seg = [System.ArraySegment[byte]]::new($bytes)
+    [void]$WebSocket.SendAsync($seg, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $CancellationToken).GetAwaiter().GetResult()
+}
+
+function Receive-WsMessage {
+    <#
+    .SYNOPSIS
+        Receives one full WebSocket text message (assembling continuation
+        frames), bounded by MaxBytes.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Returns one message; noun is a message.')]
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$WebSocket,
+        [Parameter(Mandatory)]$CancellationToken,
+        [Parameter(Mandatory)][int]$MaxBytes
+    )
+    $ms = [System.IO.MemoryStream]::new()
+    try {
+        $buf = [byte[]]::new(65536)
+        do {
+            $seg = [System.ArraySegment[byte]]::new($buf)
+            $r = $WebSocket.ReceiveAsync($seg, $CancellationToken).GetAwaiter().GetResult()
+            if ($r.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
+                throw "zwave-js-ui closed the WebSocket connection."
+            }
+            $ms.Write($buf, 0, $r.Count)
+            if ($ms.Length -gt $MaxBytes) {
+                throw "zwave-js-ui response exceeded $MaxBytes bytes; refusing to parse."
+            }
+        } while (-not $r.EndOfMessage)
+        return [System.Text.Encoding]::UTF8.GetString($ms.ToArray())
     }
-    $resp = Invoke-WebRequest @p
-    $content = [string]$resp.Content
-    if ($content.Length -gt $MaxBytes) {
-        throw "zwave-js-ui response exceeded $MaxBytes bytes; refusing to parse."
-    }
-    return $content
+    finally { $ms.Dispose() }
 }
 
 function Get-ZwaveJsNodes {
     <#
     .SYNOPSIS
-        Fetches the Z-Wave node array from a zwave-js-ui instance over socket.io.
+        Fetches the Z-Wave node array from a zwave-js-ui instance over WebSocket.
     .DESCRIPTION
-        Uses engine.io v4 HTTP long-polling. Returns the same node array shape as
-        a manual nodes_dump.json export. Read-only. Throws a specific error on
-        any failure so the caller can abort before touching the database.
+        Connects to zwave-js-ui's socket.io endpoint over a WebSocket (engine.io
+        v4), emits the 'INITED' event, and returns the node array from the ack
+        payload - the same node-array shape as a manual nodes_dump.json export.
+        Read-only. Throws a specific error on any failure so the caller can abort
+        before touching the database.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Public function name is fixed; it returns the node collection.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Url,
         [string]$Token,
         [switch]$SkipCertificateCheck,
-        [int]$TimeoutSec = 20
+        [int]$TimeoutSec = 30
     )
 
-    $base = $Url.TrimEnd('/')
-    $isHttps = $base -like 'https://*'
+    $u = try { [Uri]$Url } catch { throw "Invalid zwave-js-ui URL: $Url" }
+    $wsScheme = switch ($u.Scheme) {
+        'https' { 'wss' }
+        'http'  { 'ws' }
+        default { throw "zwave-js-ui URL must be http:// or https:// ($Url)." }
+    }
 
-    # The token is a secret: never send it over a plaintext channel.
-    if ($Token -and -not $isHttps) {
-        throw "Refusing to send -ZwaveJsToken over a non-https URL ($base). Use an https:// zwave-js-ui URL so the token is not transmitted in cleartext."
+    # The token is a secret: never send it over a non-TLS channel.
+    if ($Token -and $wsScheme -eq 'ws') {
+        throw "Refusing to send -ZwaveJsToken over a non-https URL ($Url). Use an https:// zwave-js-ui URL so the token is not transmitted in cleartext."
     }
     if ($Token -and $SkipCertificateCheck) {
         Write-Warning "-SkipCertificateCheck disables TLS validation; a token sent to an unverified server can be intercepted."
     }
 
-    $sio = "$base/socket.io/"
-    $nonce = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString()
-    $req = @{ SkipCertificateCheck = $SkipCertificateCheck }
+    $wsUri = [Uri]("{0}://{1}/socket.io/?EIO=4&transport=websocket" -f $wsScheme, $u.Authority)
+    $maxBytes = 64MB
 
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
-    function private:RemainingSec { [int][Math]::Max(1, [Math]::Ceiling(($deadline - [DateTime]::UtcNow).TotalSeconds)) }
+    $cts = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds($TimeoutSec))
+    $tok = $cts.Token
+    $ws = [System.Net.WebSockets.ClientWebSocket]::new()
+    if ($SkipCertificateCheck) {
+        # Accept any certificate (the callback's four delegate args are ignored).
+        $ws.Options.RemoteCertificateValidationCallback = { $true }
+    }
 
-    # 1. Handshake
     try {
-        $openBody = Invoke-EngineIoRequest @req -Method GET -Uri "$sio`?EIO=4&transport=polling&t=$nonce" -TimeoutSec 10
-    }
-    catch {
-        $m = $_.Exception.Message
-        if ($m -match 'certificate|SSL|TLS') {
-            $hint = if ($Token) { 'Use a trusted certificate' } else { 'pass -SkipCertificateCheck for a self-signed certificate' }
-            throw "TLS certificate not trusted for $base - $hint. ($m)"
+        # Connect
+        try {
+            [void]$ws.ConnectAsync($wsUri, $tok).GetAwaiter().GetResult()
         }
-        throw "Could not reach zwave-js-ui at $base ($m)"
-    }
-    $open = ConvertFrom-EngineIoOpen -Body $openBody
-    $poll = "$sio`?EIO=4&transport=polling&sid=$($open.Sid)"
-
-    # 2-4. Connect, request state, poll. Map HTTP 401/403 to the auth message.
-    try {
-        $connectPacket = if ($Token) { '40' + (@{ token = $Token } | ConvertTo-Json -Compress) } else { '40' }
-        Invoke-EngineIoRequest @req -Method POST -Uri $poll -Body $connectPacket -TimeoutSec 10 | Out-Null
-
-        $body = Invoke-EngineIoRequest @req -Method GET -Uri $poll -TimeoutSec (RemainingSec)
-        Invoke-EngineIoRequest @req -Method POST -Uri $poll -Body '42["INIT"]' -TimeoutSec 10 | Out-Null
-
-        $stateArgs = $null
-        while ($null -eq $stateArgs -and [DateTime]::UtcNow -lt $deadline) {
-            $rawPackets = Split-EngineIoPayload -Body $body
-            $packets = @(foreach ($rp in $rawPackets) { ConvertFrom-SocketIoPacket -Packet $rp })
-
-            $connErr = Get-SocketIoConnectError -Packets $packets
-            if ($connErr) { throw [System.Management.Automation.RuntimeException]::new("zwave-js-ui requires authentication - pass -ZwaveJsToken. ($connErr)") }
-
-            $stateArgs = Get-SocketIoEventArgs -Packets $packets -Event 'INITED'
-            if ($null -ne $stateArgs) { break }
-
-            # Answer a server ping to keep the session alive, then back off and re-poll.
-            if ($packets | Where-Object { $_.EioType -eq '2' }) {
-                try { Invoke-EngineIoRequest @req -Method POST -Uri $poll -Body '3' -TimeoutSec 10 | Out-Null } catch { Write-Verbose "pong failed: $_" }
+        catch {
+            $m = $_.Exception.Message
+            if ($m -match 'certificate|SSL|TLS') {
+                $hint = if ($Token) { 'Use a trusted certificate' } else { 'pass -SkipCertificateCheck for a self-signed certificate' }
+                throw "TLS certificate not trusted for $Url - $hint. ($m)"
             }
-            Start-Sleep -Milliseconds 200
-            try {
-                $body = Invoke-EngineIoRequest @req -Method GET -Uri $poll -TimeoutSec (RemainingSec)
-            }
-            catch {
-                # A poll timeout is expected on a held long-poll; continue until the deadline.
-                if ([DateTime]::UtcNow -ge $deadline) { break }
-                $body = ''
+            throw "Could not reach zwave-js-ui at $Url ($m)"
+        }
+
+        # 1. engine.io open
+        [void](ConvertFrom-EngineIoOpen -Body (Receive-WsMessage -WebSocket $ws -CancellationToken $tok -MaxBytes $maxBytes))
+
+        # 2. socket.io connect (+ optional auth)
+        $connect = if ($Token) { '40' + (@{ token = $Token } | ConvertTo-Json -Compress) } else { '40' }
+        Send-WsText -WebSocket $ws -Text $connect -CancellationToken $tok
+
+        # 3. connect ack / error
+        $ackPkt = ConvertFrom-SocketIoPacket -Packet (Receive-WsMessage -WebSocket $ws -CancellationToken $tok -MaxBytes $maxBytes)
+        $connErr = Get-SocketIoConnectError -Packets @($ackPkt)
+        if ($connErr) { throw "zwave-js-ui requires authentication - pass -ZwaveJsToken. ($connErr)" }
+
+        # 4. request state: emit the 'INITED' event (data true, ack id 0)
+        Send-WsText -WebSocket $ws -Text '420["INITED",true]' -CancellationToken $tok
+
+        # 5. read until the ack carrying state, answering pings
+        $state = $null
+        while ($null -eq $state) {
+            $msg = Receive-WsMessage -WebSocket $ws -CancellationToken $tok -MaxBytes $maxBytes
+            if ($msg -eq '2') { Send-WsText -WebSocket $ws -Text '3' -CancellationToken $tok; continue }  # ping -> pong
+            $pkt = ConvertFrom-SocketIoPacket -Packet $msg
+            $connErr = Get-SocketIoConnectError -Packets @($pkt)
+            if ($connErr) { throw "zwave-js-ui rejected the connection. ($connErr)" }
+            if ($pkt.EioType -eq '4' -and $pkt.SioType -eq '3') { $state = @($pkt.Args)[0] }  # ACK
+        }
+
+        if ($null -eq $state -or 'nodes' -notin $state.PSObject.Properties.Name -or $null -eq $state.nodes) {
+            throw "zwave-js-ui returned no nodes."
+        }
+
+        # In the live socket state each node's 'values' is a map keyed by value
+        # id; a nodes_dump.json export flattens it to an array. Normalize to the
+        # array shape so the rest of the tool (which iterates node.values) matches
+        # the dump exactly. Each value object already carries its own .id/.label.
+        $nodes = @($state.nodes)
+        foreach ($node in $nodes) {
+            if ($node.PSObject.Properties['values'] -and $null -ne $node.values -and $node.values -isnot [System.Array]) {
+                $node.values = @($node.values.PSObject.Properties | ForEach-Object { $_.Value })
             }
         }
+        return $nodes
     }
-    catch [Microsoft.PowerShell.Commands.HttpResponseException] {
-        $code = [int]$_.Exception.Response.StatusCode
-        if ($code -eq 401 -or $code -eq 403) {
-            throw "zwave-js-ui requires authentication - pass -ZwaveJsToken. (HTTP $code)"
+    catch [System.OperationCanceledException] {
+        throw "Timed out talking to zwave-js-ui at $Url after $TimeoutSec s."
+    }
+    finally {
+        # Best-effort graceful close, bounded so a peer that does not complete the
+        # close handshake cannot hang the client (we already have the data).
+        try {
+            if ($ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+                $closeCts = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(5))
+                [void]$ws.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, '', $closeCts.Token).GetAwaiter().GetResult()
+            }
         }
-        throw "zwave-js-ui request failed (HTTP $code)."
+        catch { Write-Verbose "zwave-js WebSocket close failed: $_" }
+        $ws.Dispose()
     }
-
-    if ($null -eq $stateArgs) { throw "Connected to zwave-js-ui but received no node state within $TimeoutSec s." }
-
-    $state = @($stateArgs)[0]
-    if ($null -eq $state -or 'nodes' -notin $state.PSObject.Properties.Name -or $null -eq $state.nodes) {
-        throw "zwave-js-ui returned no nodes."
-    }
-
-    # Disconnect (best-effort)
-    try { Invoke-EngineIoRequest @req -Method POST -Uri $poll -Body '41' -TimeoutSec 5 | Out-Null } catch { Write-Verbose "zwave-js disconnect failed: $_" }
-
-    return @($state.nodes)
 }
 
 Export-ModuleMember -Function Get-ZwaveJsNodes
