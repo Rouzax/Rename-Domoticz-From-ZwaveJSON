@@ -26,7 +26,20 @@
         DB folder, and then to the system TEMP folder.
 
 .PARAMETER JsonFile
-    Path to the JSON file containing Z-Wave data.
+    Path to the JSON file containing Z-Wave data. Mandatory: one of -JsonFile or -ZwaveJsUrl.
+
+.PARAMETER ZwaveJsUrl
+    Base URL of a running zwave-js-ui instance (e.g. https://host:8091).
+    Alternative to -JsonFile; reads node data live over zwave-js-ui's socket.io
+    API. Mandatory: one of -JsonFile or -ZwaveJsUrl.
+
+.PARAMETER ZwaveJsToken
+    Optional auth token for a zwave-js-ui with authentication enabled.
+    Requires an https URL (refused over http). Prefer passing via an
+    environment variable rather than inline.
+
+.PARAMETER SkipCertificateCheck
+    Skip TLS validation for a self-signed https zwave-js-ui.
 
 .PARAMETER DbPath
     Path to the Domoticz SQLite database.
@@ -83,9 +96,14 @@
         -HtmlReport "D:\report.html" `
         -ExcludePattern "test_.*"
 
+.EXAMPLE
+    .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "https://host:8091" -DbPath "domoticz.db" -DryRun
+
+    Reads node data live from zwave-js-ui instead of a JSON export (read-only).
+
 .NOTES
     Author:  Rouzax
-    Version: 2.6
+    Version: 2.8
     Requires: PowerShell 7.0+ and the SQLite assemblies from setup.ps1 (./lib)
     Encoding: Save as UTF-8 (no BOM) if you prefer that style.
 #>

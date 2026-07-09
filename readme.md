@@ -27,7 +27,7 @@ This script modifies the **Domoticz database** directly. While it includes safet
 
 * **PowerShell 7.0+** (required for emoji support and System.Web.HttpUtility)
 * **SQLite assemblies** provisioned by `setup.ps1` (see below). No system SQLite or PSSQLite module is needed.
-* **Z-Wave JS UI** with JSON export
+* **Z-Wave JS UI**, with either a JSON export or a live instance the script can read from directly (see below); a manual export is no longer required
 * **Internet access on first setup** (to download the SQLite assemblies once)
 
 ---
@@ -64,6 +64,36 @@ git.
 
 ---
 
+## 🔌 Read Directly from zwave-js-ui (no manual export)
+
+Instead of exporting `nodes_dump.json`, point the script at your running
+zwave-js-ui instance. It reads the same node data live over zwave-js-ui's
+socket.io API (read-only; nothing in zwave-js-ui is modified):
+
+```powershell
+.\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "https://your-host:8091" -DbPath "domoticz.db" -DryRun
+```
+
+- Default zwave-js-ui port is `8091`.
+- **Authentication:** if your instance requires login, pass `-ZwaveJsToken`. The
+  token is a credential, so it is **only accepted over `https://`** (the script
+  refuses to send it over `http://`). Pass it via an environment variable, not
+  inline, to keep it out of shell history and the process argument list, e.g.:
+
+  ```powershell
+  .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "https://your-host:8091" -ZwaveJsToken $env:ZWAVEJS_TOKEN -DbPath "domoticz.db" -DryRun
+  ```
+
+  Obtain a token by logging into zwave-js-ui and copying its JWT. The script
+  never logs or stores the token.
+- **Self-signed HTTPS:** add `-SkipCertificateCheck`. Avoid combining it with a
+  token (an unverified server can intercept the token); prefer a trusted cert.
+- Requires Hass/MQTT discovery to be enabled in zwave-js-ui (it is, if Domoticz
+  received these devices via MQTT auto-discovery), because the base device
+  identifier comes from the discovery payload.
+
+---
+
 ## ⚙️ Script Parameters
 
 ```powershell
@@ -74,7 +104,8 @@ git.
 
 | Parameter | Description |
 |-----------|-------------|
-| `-JsonFile` | Path to the exported JSON file from Z-Wave JS UI |
+| `-JsonFile` | Path to the exported JSON file from Z-Wave JS UI (one of `-JsonFile` or `-ZwaveJsUrl` required) |
+| `-ZwaveJsUrl` | Base URL of a running zwave-js-ui instance (e.g. `https://host:8091`). Alternative to `-JsonFile` (one of `-JsonFile` or `-ZwaveJsUrl` required) |
 | `-DbPath` | Path to your Domoticz database (`domoticz.db`) |
 
 ### Optional Parameters
@@ -91,6 +122,8 @@ git.
 | `-DryRun` | Preview changes without modifying database | `$false` |
 | `-Force` | Skip confirmation prompts | `$false` |
 | `-NoBackup` | Skip database backup (use with caution) | `$false` |
+| `-ZwaveJsToken` | Auth token, only if your zwave-js-ui has authentication enabled. Requires an `https://` URL (refused over http) | None |
+| `-SkipCertificateCheck` | Skip TLS validation for a self-signed https zwave-js-ui | `$false` |
 
 ---
 
@@ -543,6 +576,7 @@ Without `nodeMatch`, this rule would match endpoint 2 on every device with CC38 
 
 | Version | Changes |
 |---------|---------|
+| 2.8 | **Read directly from zwave-js-ui**: new `-ZwaveJsUrl` mode fetches node data live over zwave-js-ui's socket.io API (engine.io v4 HTTP long-polling, no dependency), so a manual `nodes_dump.json` export is no longer required. `-ZwaveJsToken` supports authenticated instances (https only); `-SkipCertificateCheck` for self-signed HTTPS. Read-only; the fetch runs before any backup so a failure changes nothing |
 | 2.7 | **ARM / Raspberry Pi support**: replaced the PSSQLite module with Microsoft.Data.Sqlite + SQLitePCLRaw, provisioned by a new pinned, checksum-verified `setup.ps1` that selects the native SQLite for your platform (`linux-arm64`, `linux-arm`, `linux-x64`, `win-x64`, `osx-arm64`, ...). Extracted the data layer into a `DomoticzSqlite` module with Pester tests. **Cross-platform database-in-use detection** (Linux `/proc` scan, Windows exclusive-open, macOS `lsof`) replaces the previous Windows-only lock check and names the holding process. **Collision detection** now checks a proposed name against the full end state (including devices that keep their name), so it can no longer silently create a duplicate |
 | 2.6 | **Node-scoped rules**: New optional `nodeMatch` field lets rules target specific device types by matching Z-Wave node properties (`productLabel`, `productDescription`, `manufacturer`). Added RGBW color channel rules for Fibaro FGRGBW-442 using `nodeMatch` to avoid affecting regular dimmers |
 | 2.5 | **UX improvements**: Summary box fields now display in consistent order. Log file defaults to DB folder with timestamp (matching other output files). Malformed rules files now error instead of silently falling back to defaults. `rename_rules.json` is auto-loaded from script directory when present (29 rules vs 7 built-in). Exit code now considers TypeChanged/ImageChanged. Removed non-actionable "Missing" count from summary. Consolidated MISSING log entries into one summary line. Confirmation prompt now shows actual change counts after analysis |
