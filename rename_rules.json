@@ -252,12 +252,20 @@
       "description": "Renames Alarm Sensor CC smoke state. Sets Smoke Detector type with Reset button."
     },
     {
-      "name": "Motion Binary Sensor",
+      "name": "Motion Binary Sensor (Any)",
       "pattern": "48-\\d+-Any$",
       "replace": " - Sensor state \\(Any\\)$",
-      "with": " - Motion",
+      "with": " - Motion (Binary)",
       "switchType": 8,
-      "description": "Renames legacy binary motion sensor. Sets Motion Sensor type (often created wrong)."
+      "description": "Renames the legacy CC48 Binary Sensor motion device (Fibaro FGMS001 reports it as 'Any'). Labelled '(Binary)' to keep it distinct from the modern CC113 Notification 'Motion' device on the same node. Sets Motion Sensor type (often created wrong)."
+    },
+    {
+      "name": "Motion Binary Sensor (Motion)",
+      "pattern": "48-\\d+-Motion$",
+      "replace": " - Sensor state \\(Motion\\)$",
+      "with": " - Motion (Binary)",
+      "switchType": 8,
+      "description": "Renames the legacy CC48 Binary Sensor motion device (NEO NAS-PD07Z reports it as 'Motion'). Labelled '(Binary)' to keep it distinct from the modern CC113 Notification 'Motion' device on the same node. Sets Motion Sensor type (often created wrong)."
     },
     {
       "name": "Seismic Intensity",
