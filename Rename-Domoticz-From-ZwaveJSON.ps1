@@ -92,11 +92,25 @@
 
 #Requires -Version 7.0
 
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'FromFile')]
 param (
-    [Parameter(Mandatory = $true, Position = 0, HelpMessage = "Path to the Z-Wave JSON export file")]
+    [Parameter(Mandatory, Position = 0, ParameterSetName = 'FromFile',
+        HelpMessage = "Path to the exported JSON file from Z-Wave JS UI")]
     [ValidateNotNullOrEmpty()]
     [string]$JsonFile,
+
+    [Parameter(Mandatory, Position = 0, ParameterSetName = 'FromZwaveJs',
+        HelpMessage = "Base URL of a running zwave-js-ui instance, e.g. https://host:8091")]
+    [ValidateNotNullOrEmpty()]
+    [string]$ZwaveJsUrl,
+
+    [Parameter(ParameterSetName = 'FromZwaveJs',
+        HelpMessage = "Auth token if zwave-js-ui has authentication enabled (requires an https URL). Prefer passing via an environment variable, not inline.")]
+    [string]$ZwaveJsToken,
+
+    [Parameter(ParameterSetName = 'FromZwaveJs',
+        HelpMessage = "Skip TLS validation for a self-signed https zwave-js-ui")]
+    [switch]$SkipCertificateCheck,
 
     [Parameter(Mandatory = $true, Position = 1, HelpMessage = "Path to the Domoticz SQLite database")]
     [ValidateNotNullOrEmpty()]
@@ -1415,11 +1429,45 @@ if (-not (Test-Path -LiteralPath $DbPath)) {
 }
 Write-Host "  ✓ Database file found" -ForegroundColor Green
 
-if (-not (Test-Path -LiteralPath $JsonFile)) {
-    Write-Host "  ❌ ERROR: JSON file not found: $JsonFile" -ForegroundColor Red
-    exit $Script:ExitCodes.Error
+if ($PSCmdlet.ParameterSetName -eq 'FromFile') {
+    if (-not (Test-Path -LiteralPath $JsonFile)) {
+        Write-Host "  ❌ ERROR: JSON file not found: $JsonFile" -ForegroundColor Red
+        exit $Script:ExitCodes.Error
+    }
+    Write-Host "  ✓ JSON file found" -ForegroundColor Green
 }
-Write-Host "  ✓ JSON file found" -ForegroundColor Green
+
+# Acquire node data from the selected source BEFORE any backup or DB work,
+# so a failed fetch/parse leaves the database and filesystem untouched.
+$ZwaveData = $null
+if ($PSCmdlet.ParameterSetName -eq 'FromZwaveJs') {
+    Write-Host "  Reading nodes from zwave-js-ui at $ZwaveJsUrl..." -ForegroundColor Gray
+    try {
+        Import-Module (Join-Path $PSScriptRoot 'modules/ZwaveJsClient/ZwaveJsClient.psd1') -Force -ErrorAction Stop
+        $ZwaveData = Get-ZwaveJsNodes -Url $ZwaveJsUrl -Token $ZwaveJsToken -SkipCertificateCheck:$SkipCertificateCheck
+    }
+    catch {
+        Write-Host "  ❌ ERROR: $($_.Exception.Message)" -ForegroundColor Red
+        exit $Script:ExitCodes.Error
+    }
+    Write-Log "Loaded $(@($ZwaveData).Count) nodes from zwave-js-ui" -Level SUCCESS
+    Write-Host "  ✓ Read $(@($ZwaveData).Count) nodes from zwave-js-ui" -ForegroundColor Green
+}
+else {
+    try {
+        Write-Host "  Parsing JSON file..." -ForegroundColor Gray
+        $ZwaveData = Get-Content -LiteralPath $JsonFile -Raw | ConvertFrom-Json
+        if (-not $ZwaveData) {
+            throw "JSON parsed but returned no data"
+        }
+        Write-Log "JSON file loaded successfully" -Level SUCCESS
+        Write-Host "  ✓ JSON parsed successfully ($($ZwaveData.Count) nodes)" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "  ❌ ERROR: Failed to load/parse JSON file: $_" -ForegroundColor Red
+        exit $Script:ExitCodes.Error
+    }
+}
 
 # Check whether another process (typically a running Domoticz) has the database
 # open. Best-effort and cross-platform; see Test-DatabaseInUse. Always stop
@@ -1559,25 +1607,6 @@ try {
 }
 catch {
     Write-Host "  ❌ ERROR: Failed to load DeviceStatus table: $_" -ForegroundColor Red
-    if ($DbConn) {
-        try { $DbConn.Close() } catch { Write-Log "Failed to close connection: $_" -Level WARNING }
-    }
-    exit $Script:ExitCodes.Error
-}
-
-# Load JSON data
-$ZwaveData = $null
-try {
-    Write-Host "  Parsing JSON file..." -ForegroundColor Gray
-    $ZwaveData = Get-Content -LiteralPath $JsonFile -Raw | ConvertFrom-Json
-    if (-not $ZwaveData) {
-        throw "JSON parsed but returned no data"
-    }
-    Write-Log "JSON file loaded successfully" -Level SUCCESS
-    Write-Host "  ✓ JSON parsed successfully ($($ZwaveData.Count) nodes)" -ForegroundColor Green
-}
-catch {
-    Write-Host "  ❌ ERROR: Failed to load/parse JSON file: $_" -ForegroundColor Red
     if ($DbConn) {
         try { $DbConn.Close() } catch { Write-Log "Failed to close connection: $_" -Level WARNING }
     }
