@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.8.1] - 2026-07-09
+
+**`-ZwaveJsToken` over http**: the token is now allowed over `http://` with a cleartext warning instead of being refused. A zwave-js-ui instance is usually on a trusted LAN or localhost, so the previous https-only requirement was too strict. `https://` is still recommended on untrusted networks. The token stays in the connect payload and is never logged.
+
 ## [2.8] - 2026-07-09
 
 **Read directly from zwave-js-ui**: new `-ZwaveJsUrl` mode fetches node data live over zwave-js-ui's socket.io API (engine.io v4 WebSocket, no dependency), so a manual `nodes_dump.json` export is no longer required. `-ZwaveJsToken` supports authenticated instances (https only); `-SkipCertificateCheck` for self-signed HTTPS. Read-only; the fetch runs before any backup so a failure changes nothing.
