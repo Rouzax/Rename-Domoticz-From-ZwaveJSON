@@ -17,6 +17,12 @@ nav = [
     { "Your first run" = "getting-started/first-run.md" },
     { "Input modes" = "getting-started/input-modes.md" },
   ]},
+  { "Using the tool" = [
+    { "Running the tool" = "using/running.md" },
+    { "Understanding the output" = "using/output.md" },
+    { "Name collisions" = "using/collisions.md" },
+    { "Reverting changes" = "using/reverting.md" },
+  ]},
 ]
 
 [project.theme]
