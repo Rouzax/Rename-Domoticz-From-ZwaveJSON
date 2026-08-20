@@ -484,6 +484,12 @@ function Get-TransformedDeviceName {
     .SYNOPSIS
         Applies renaming rules to transform a device name.
         Returns the transformed name and any matched rule's switchType/customImage.
+    .DESCRIPTION
+        The first rule that actually does something wins: one whose pattern
+        matches the DeviceID and that either rewrites the name or carries a
+        switchType/customImage. Rules that match the DeviceID but change nothing
+        are stepped over, so several rules can share a pattern and differ only in
+        what they replace.
     #>
     [CmdletBinding()]
     param (
@@ -522,6 +528,16 @@ function Get-TransformedDeviceName {
 
         if ($DeviceID -match $rule.Pattern) {
             $transformed = $NewName -replace $rule.Replace, $rule.With
+            $setsFields = $rule.ContainsKey('SwitchType') -or $rule.ContainsKey('CustomImage')
+
+            # A rule whose pattern matched but which left the name alone and sets
+            # no fields did nothing at all, so keep looking. Several rules can
+            # share a pattern and differ only in what they replace: a multi-state
+            # value (Central Scene) has one DeviceID for several rows, so the
+            # state text in the name, not the DeviceID, is what tells them apart.
+            # Falling through can only produce an effect where there was none.
+            if ($transformed -eq $NewName -and -not $setsFields) { continue }
+
             if ($transformed -ne $NewName) {
                 Write-Log "Applied rule '$($rule.Name)' to $DeviceID" -Level DEBUG
             }
@@ -620,6 +636,41 @@ function Get-CollisionBlame {
         Used       = if ($device -and $device.ContainsKey('Used')) { [int]$device.Used } else { 0 }
         LastUpdate = if ($device -and $device.ContainsKey('LastUpdate')) { [string]$device.LastUpdate } else { '' }
     }
+}
+
+function Get-UnitStateMap {
+    <#
+    .SYNOPSIS
+        Maps each Domoticz Unit of a device to its Z-Wave state label.
+    .DESCRIPTION
+        Domoticz stores a multi-state Z-Wave value (Central Scene, for example)
+        as one DeviceID with one Unit row per state, numbered by state value.
+        That correspondence is observed rather than contractual, so this returns
+        a map only when it can be established beyond doubt: the row count must
+        equal the state count and every Unit must match a state value. Anything
+        else returns $null and the caller falls back to skipping the device.
+    .OUTPUTS
+        Hashtable of Unit number to state text, or $null.
+    #>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)][AllowNull()]$Value,
+        [Parameter(Mandatory)][int[]]$Units
+    )
+
+    if ($null -eq $Value -or -not $Value.PSObject.Properties['states']) { return $null }
+    $states = @($Value.states)
+    if ($states.Count -ne $Units.Count) { return $null }
+
+    $map = @{}
+    foreach ($s in $states) {
+        if (-not $s.PSObject.Properties['value'] -or -not $s.PSObject.Properties['text']) { return $null }
+        $map[[int]$s.value] = [string]$s.text
+    }
+    foreach ($u in $Units) {
+        if (-not $map.ContainsKey($u)) { return $null }
+    }
+    return $map
 }
 
 function Format-Duration {
@@ -2073,26 +2124,25 @@ foreach ($Device in $ZwaveData) {
             continue
         }
 
-        # Skip devices whose DeviceStatus rows disagree. Renaming would collapse
-        # several deliberately distinct names into one, and the undo statement
-        # matches on DeviceID alone so it could not put them back.
-        if ($ambiguousDetails.ContainsKey($DeviceID)) {
+        # A DeviceID backed by several rows can be named per unit when the value
+        # tells us what each unit means. That is resolved here, BEFORE collision
+        # detection runs: the targets all share one base name, so appending the
+        # state suffix afterwards would let them collide with one another.
+        $deviceRows = @($rowsById[$DeviceID] | Sort-Object { [int]$_.Unit })
+        $unitStateMap = $null
+        if ($deviceRows.Count -gt 1) {
+            $unitStateMap = Get-UnitStateMap -Value $Value -Units @($deviceRows | ForEach-Object { [int]$_.Unit })
+        }
+
+        # Skip devices whose DeviceStatus rows disagree and whose units cannot be
+        # told apart. Renaming would collapse several deliberately distinct names
+        # into one, and nothing in the node source says which row meant what.
+        if ($null -eq $unitStateMap -and $ambiguousDetails.ContainsKey($DeviceID)) {
             Write-Log "SKIPPED (ambiguous): $DeviceID | several DeviceStatus rows disagree; renaming would collapse them" -Level WARNING
             $Script:AmbiguousDevices.Add($ambiguousDetails[$DeviceID])
             $Script:Stats.Ambiguous++
             continue
         }
-
-        # Build new name
-        $parts = @($Location, $DeviceName, $Label) | Where-Object { $_ -and $_.Trim() -ne "" }
-        $NewName = ($parts -join " - ").Trim()
-        $NewName = $NewName -replace '\s{2,}', ' '
-
-        # Get transformed name and any switchType/customImage from matched rule
-        $transformResult = Get-TransformedDeviceName -DeviceID $DeviceID -NewName $NewName -Rules $RenamingRules -NodeData $nodeData
-        $NewName = $transformResult.Name
-        $NewSwitchType = $transformResult.SwitchType
-        $NewCustomImage = $transformResult.CustomImage
 
         # Check if device exists
         $deviceData = $allDevices[$DeviceID]
@@ -2101,171 +2151,217 @@ foreach ($Device in $ZwaveData) {
             continue
         }
 
-        $OldName = $deviceData.Name
-        $OldSwitchType = $deviceData.SwitchType
-        $OldCustomImage = $deviceData.CustomImage
+        # Build the base name. Every row of this device shares it.
+        $parts = @($Location, $DeviceName, $Label) | Where-Object { $_ -and $_.Trim() -ne "" }
+        $baseName = ($parts -join " - ").Trim()
+        $baseName = $baseName -replace '\s{2,}', ' '
 
-        # Preserve "$" prefix
-        if ($OldName -match '^\$' -and $NewName -notmatch '^\$') {
-            $NewName = "`$" + $NewName
+        # One rename target per DeviceID, except when the unit-to-state map could
+        # be established: then every row becomes its own target, with its own
+        # name suffix and its own previous values taken from that row. Reading
+        # the previous values from $allDevices would be wrong here, because that
+        # holds only the last row read for the DeviceID.
+        $unitTargets = [System.Collections.Generic.List[hashtable]]::new()
+        if ($null -ne $unitStateMap) {
+            foreach ($dr in $deviceRows) {
+                $unitNo = [int]$dr.Unit
+                $unitTargets.Add(@{
+                    Units          = @($unitNo)
+                    Suffix         = " - $($unitStateMap[$unitNo])"
+                    OldName        = [string]$dr.Name
+                    OldSwitchType  = [int]$dr.SwitchType
+                    OldCustomImage = [int]$dr.CustomImage
+                    OldNamesByUnit = @{ $unitNo = [string]$dr.Name }
+                })
+            }
+        }
+        else {
+            # A DeviceID can still back several rows here, ones that agree. Carry
+            # every one of them so the apply and undo stages address each row
+            # individually instead of rewriting them all through a DeviceID-only
+            # match.
+            $oldNamesByUnit = @{}
+            foreach ($dr in $deviceRows) { $oldNamesByUnit[[int]$dr.Unit] = [string]$dr.Name }
+            $unitTargets.Add(@{
+                Units          = @($deviceRows | ForEach-Object { [int]$_.Unit })
+                Suffix         = ''
+                OldName        = [string]$deviceData.Name
+                OldSwitchType  = [int]$deviceData.SwitchType
+                OldCustomImage = [int]$deviceData.CustomImage
+                OldNamesByUnit = $oldNamesByUnit
+            })
         }
 
-        # Normalize for comparison
-        $OldNameNorm = ($OldName -replace '\s{2,}', ' ').Trim()
-        $NewNameNorm = ($NewName -replace '\s{2,}', ' ').Trim()
+        foreach ($target in $unitTargets) {
+            # The state suffix is part of the name handed to the rules engine, so
+            # an installation can rewrite the raw Z-Wave state text to whatever
+            # it wants to see in Domoticz without touching this script.
+            $NewName = "$baseName$($target.Suffix)"
 
-        # Check what needs to change
-        $nameChanged = ($OldNameNorm -ne $NewNameNorm)
-        $switchTypeChanged = ($null -ne $NewSwitchType -and $OldSwitchType -ne $NewSwitchType)
-        $customImageChanged = ($null -ne $NewCustomImage -and $OldCustomImage -ne $NewCustomImage)
+            # Get transformed name and any switchType/customImage from matched rule
+            $transformResult = Get-TransformedDeviceName -DeviceID $DeviceID -NewName $NewName -Rules $RenamingRules -NodeData $nodeData
+            $NewName = $transformResult.Name
+            $NewSwitchType = $transformResult.SwitchType
+            $NewCustomImage = $transformResult.CustomImage
 
-        # Skip if nothing changed
-        if (-not $nameChanged -and -not $switchTypeChanged -and -not $customImageChanged) {
-            Write-Log "UNCHANGED: $DeviceID | No changes needed" -Level DEBUG
-            $Script:Stats.Unchanged++
-            continue
-        }
+            $OldName = $target.OldName
+            $OldSwitchType = $target.OldSwitchType
+            $OldCustomImage = $target.OldCustomImage
 
-        # Check for name collision (only if the name is actually changing).
-        #
-        # Because $proposedNames is seeded with every existing device name, this
-        # catches a rename landing on a device that keeps its name, not only a
-        # clash between two pending renames.
-        if ($nameChanged) {
-            if ($proposedNames.ContainsKey($NewNameNorm)) {
-                $existingDeviceId = $proposedNames[$NewNameNorm]
-                $existingIsPending = $pendingNames.Contains($NewNameNorm)
-                $baseIdEscaped = [regex]::Escape($BaseIdentifier)
+            # Preserve "$" prefix
+            if ($OldName -match '^\$' -and $NewName -notmatch '^\$') {
+                $NewName = "`$" + $NewName
+            }
 
-                # Extract endpoint numbers from both DeviceIDs
-                $currentSuffix = $DeviceID -replace "^${baseIdEscaped}_", ""
-                $existingSuffix = $existingDeviceId -replace "^${baseIdEscaped}_", ""
-                $currentEndpoint = if ($currentSuffix -match '^\d+-\d+-(\d+)') { $Matches[1] } else { $null }
-                $existingEndpoint = if ($existingSuffix -match '^\d+-\d+-(\d+)') { $Matches[1] } else { $null }
+            # Normalize for comparison
+            $OldNameNorm = ($OldName -replace '\s{2,}', ' ').Trim()
+            $NewNameNorm = ($NewName -replace '\s{2,}', ' ').Trim()
 
-                $endpointsDiffer = ($null -ne $currentEndpoint -and $null -ne $existingEndpoint -and $currentEndpoint -ne $existingEndpoint)
-                $disambiguatedNorm = "$NewNameNorm - EP$currentEndpoint"
+            # Check what needs to change
+            $nameChanged = ($OldNameNorm -ne $NewNameNorm)
+            $switchTypeChanged = ($null -ne $NewSwitchType -and $OldSwitchType -ne $NewSwitchType)
+            $customImageChanged = ($null -ne $NewCustomImage -and $OldCustomImage -ne $NewCustomImage)
 
-                # Snapshot the contested name before the branches below reassign
-                # $NewNameNorm to the disambiguated form. Stripping the suffix
-                # back off afterwards would corrupt a real name ending in "EP<n>".
-                $contestedName = $NewNameNorm
+            # Skip if nothing changed
+            if (-not $nameChanged -and -not $switchTypeChanged -and -not $customImageChanged) {
+                Write-Log "UNCHANGED: $DeviceID | No changes needed" -Level DEBUG
+                $Script:Stats.Unchanged++
+                continue
+            }
 
-                if ($endpointsDiffer -and $existingIsPending) {
-                    # Both sides are pending renames on different endpoints:
-                    # disambiguate BOTH by appending their endpoint numbers.
-                    foreach ($item in $Script:RenameList) {
-                        if ($item.DeviceID -eq $existingDeviceId -and $item.NameChanged) {
-                            $item.NewName = "$($item.NewName) - EP$existingEndpoint"
-                            break
+            # Check for name collision (only if the name is actually changing).
+            #
+            # Because $proposedNames is seeded with every existing device name, this
+            # catches a rename landing on a device that keeps its name, not only a
+            # clash between two pending renames.
+            if ($nameChanged) {
+                if ($proposedNames.ContainsKey($NewNameNorm)) {
+                    $existingDeviceId = $proposedNames[$NewNameNorm]
+                    $existingIsPending = $pendingNames.Contains($NewNameNorm)
+                    $baseIdEscaped = [regex]::Escape($BaseIdentifier)
+
+                    # Extract endpoint numbers from both DeviceIDs
+                    $currentSuffix = $DeviceID -replace "^${baseIdEscaped}_", ""
+                    $existingSuffix = $existingDeviceId -replace "^${baseIdEscaped}_", ""
+                    $currentEndpoint = if ($currentSuffix -match '^\d+-\d+-(\d+)') { $Matches[1] } else { $null }
+                    $existingEndpoint = if ($existingSuffix -match '^\d+-\d+-(\d+)') { $Matches[1] } else { $null }
+
+                    $endpointsDiffer = ($null -ne $currentEndpoint -and $null -ne $existingEndpoint -and $currentEndpoint -ne $existingEndpoint)
+                    $disambiguatedNorm = "$NewNameNorm - EP$currentEndpoint"
+
+                    # Snapshot the contested name before the branches below reassign
+                    # $NewNameNorm to the disambiguated form. Stripping the suffix
+                    # back off afterwards would corrupt a real name ending in "EP<n>".
+                    $contestedName = $NewNameNorm
+
+                    if ($endpointsDiffer -and $existingIsPending) {
+                        # Both sides are pending renames on different endpoints:
+                        # disambiguate BOTH by appending their endpoint numbers.
+                        foreach ($item in $Script:RenameList) {
+                            if ($item.DeviceID -eq $existingDeviceId -and $item.NameChanged) {
+                                $item.NewName = "$($item.NewName) - EP$existingEndpoint"
+                                break
+                            }
                         }
+
+                        # Update tracking: remove base name, add disambiguated existing name
+                        $proposedNames.Remove($NewNameNorm)
+                        [void]$pendingNames.Remove($NewNameNorm)
+                        $proposedNames["$NewNameNorm - EP$existingEndpoint"] = $existingDeviceId
+                        [void]$pendingNames.Add("$NewNameNorm - EP$existingEndpoint")
+
+                        # Free this device's old name and register its disambiguated name
+                        if ($proposedNames[$OldNameNorm] -eq $DeviceID) { $proposedNames.Remove($OldNameNorm); [void]$pendingNames.Remove($OldNameNorm) }
+                        $NewName = "$NewName - EP$currentEndpoint"
+                        $NewNameNorm = $disambiguatedNorm
+                        $proposedNames[$NewNameNorm] = $DeviceID
+                        [void]$pendingNames.Add($NewNameNorm)
+
+                        $Script:ResolvedCollisions.Add([PSCustomObject]@{
+                            ContestedName = $contestedName
+                            Resolution    = "Endpoint suffixes EP$existingEndpoint and EP$currentEndpoint appended"
+                            Wanted        = Get-CollisionBlame -DeviceID $DeviceID -AllDevices $allDevices -SourceIds $sourceDeviceIds
+                            Held          = Get-CollisionBlame -DeviceID $existingDeviceId -AllDevices $allDevices -SourceIds $sourceDeviceIds
+                        })
+                        $Script:Stats.Collisions++
+                        Write-Log "COLLISION RESOLVED: Disambiguated with EP$existingEndpoint and EP$currentEndpoint for $existingDeviceId and $DeviceID" -Level INFO
                     }
+                    elseif ($endpointsDiffer -and -not $proposedNames.ContainsKey($disambiguatedNorm)) {
+                        # Existing owner keeps its name (not a pending rename). Leave it
+                        # alone and disambiguate only THIS device with its endpoint.
+                        if ($proposedNames[$OldNameNorm] -eq $DeviceID) { $proposedNames.Remove($OldNameNorm); [void]$pendingNames.Remove($OldNameNorm) }
+                        $NewName = "$NewName - EP$currentEndpoint"
+                        $NewNameNorm = $disambiguatedNorm
+                        $proposedNames[$NewNameNorm] = $DeviceID
+                        [void]$pendingNames.Add($NewNameNorm)
 
-                    # Update tracking: remove base name, add disambiguated existing name
-                    $proposedNames.Remove($NewNameNorm)
-                    [void]$pendingNames.Remove($NewNameNorm)
-                    $proposedNames["$NewNameNorm - EP$existingEndpoint"] = $existingDeviceId
-                    [void]$pendingNames.Add("$NewNameNorm - EP$existingEndpoint")
-
-                    # Free this device's old name and register its disambiguated name
-                    if ($proposedNames[$OldNameNorm] -eq $DeviceID) { $proposedNames.Remove($OldNameNorm); [void]$pendingNames.Remove($OldNameNorm) }
-                    $NewName = "$NewName - EP$currentEndpoint"
-                    $NewNameNorm = $disambiguatedNorm
-                    $proposedNames[$NewNameNorm] = $DeviceID
-                    [void]$pendingNames.Add($NewNameNorm)
-
-                    $Script:ResolvedCollisions.Add([PSCustomObject]@{
-                        ContestedName = $contestedName
-                        Resolution    = "Endpoint suffixes EP$existingEndpoint and EP$currentEndpoint appended"
-                        Wanted        = Get-CollisionBlame -DeviceID $DeviceID -AllDevices $allDevices -SourceIds $sourceDeviceIds
-                        Held          = Get-CollisionBlame -DeviceID $existingDeviceId -AllDevices $allDevices -SourceIds $sourceDeviceIds
-                    })
-                    $Script:Stats.Collisions++
-                    Write-Log "COLLISION RESOLVED: Disambiguated with EP$existingEndpoint and EP$currentEndpoint for $existingDeviceId and $DeviceID" -Level INFO
-                }
-                elseif ($endpointsDiffer -and -not $proposedNames.ContainsKey($disambiguatedNorm)) {
-                    # Existing owner keeps its name (not a pending rename). Leave it
-                    # alone and disambiguate only THIS device with its endpoint.
-                    if ($proposedNames[$OldNameNorm] -eq $DeviceID) { $proposedNames.Remove($OldNameNorm); [void]$pendingNames.Remove($OldNameNorm) }
-                    $NewName = "$NewName - EP$currentEndpoint"
-                    $NewNameNorm = $disambiguatedNorm
-                    $proposedNames[$NewNameNorm] = $DeviceID
-                    [void]$pendingNames.Add($NewNameNorm)
-
-                    $Script:ResolvedCollisions.Add([PSCustomObject]@{
-                        ContestedName = $contestedName
-                        Resolution    = "Endpoint suffix EP$currentEndpoint appended"
-                        Wanted        = Get-CollisionBlame -DeviceID $DeviceID -AllDevices $allDevices -SourceIds $sourceDeviceIds
-                        Held          = Get-CollisionBlame -DeviceID $existingDeviceId -AllDevices $allDevices -SourceIds $sourceDeviceIds
-                    })
-                    $Script:Stats.Collisions++
-                    Write-Log "COLLISION RESOLVED: Disambiguated $DeviceID with EP$currentEndpoint (conflicted with $existingDeviceId)" -Level INFO
+                        $Script:ResolvedCollisions.Add([PSCustomObject]@{
+                            ContestedName = $contestedName
+                            Resolution    = "Endpoint suffix EP$currentEndpoint appended"
+                            Wanted        = Get-CollisionBlame -DeviceID $DeviceID -AllDevices $allDevices -SourceIds $sourceDeviceIds
+                            Held          = Get-CollisionBlame -DeviceID $existingDeviceId -AllDevices $allDevices -SourceIds $sourceDeviceIds
+                        })
+                        $Script:Stats.Collisions++
+                        Write-Log "COLLISION RESOLVED: Disambiguated $DeviceID with EP$currentEndpoint (conflicted with $existingDeviceId)" -Level INFO
+                    }
+                    else {
+                        # Cannot auto-resolve (same endpoint, missing endpoints, or the
+                        # disambiguated name is itself taken). Report and skip both.
+                        $Script:NameCollisions.Add([PSCustomObject]@{
+                            NewName   = $NewNameNorm
+                            DeviceID1 = $existingDeviceId
+                            DeviceID2 = $DeviceID
+                            Held      = Get-CollisionBlame -DeviceID $existingDeviceId -AllDevices $allDevices -SourceIds $sourceDeviceIds
+                            Wanted    = Get-CollisionBlame -DeviceID $DeviceID -AllDevices $allDevices -SourceIds $sourceDeviceIds
+                        })
+                        $Script:Stats.Collisions++
+                        Write-Log "COLLISION: '$NewNameNorm' would be assigned to both $existingDeviceId and $DeviceID" -Level WARNING
+                    }
                 }
                 else {
-                    # Cannot auto-resolve (same endpoint, missing endpoints, or the
-                    # disambiguated name is itself taken). Report and skip both.
-                    $Script:NameCollisions.Add([PSCustomObject]@{
-                        NewName   = $NewNameNorm
-                        DeviceID1 = $existingDeviceId
-                        DeviceID2 = $DeviceID
-                        Held      = Get-CollisionBlame -DeviceID $existingDeviceId -AllDevices $allDevices -SourceIds $sourceDeviceIds
-                        Wanted    = Get-CollisionBlame -DeviceID $DeviceID -AllDevices $allDevices -SourceIds $sourceDeviceIds
-                    })
-                    $Script:Stats.Collisions++
-                    Write-Log "COLLISION: '$NewNameNorm' would be assigned to both $existingDeviceId and $DeviceID" -Level WARNING
+                    # Free this device's old name (it is moving) and claim the new one.
+                    if ($proposedNames[$OldNameNorm] -eq $DeviceID) { $proposedNames.Remove($OldNameNorm); [void]$pendingNames.Remove($OldNameNorm) }
+                    $proposedNames[$NewNameNorm] = $DeviceID
+                    [void]$pendingNames.Add($NewNameNorm)
                 }
             }
-            else {
-                # Free this device's old name (it is moving) and claim the new one.
-                if ($proposedNames[$OldNameNorm] -eq $DeviceID) { $proposedNames.Remove($OldNameNorm); [void]$pendingNames.Remove($OldNameNorm) }
-                $proposedNames[$NewNameNorm] = $DeviceID
-                [void]$pendingNames.Add($NewNameNorm)
+
+            # Build change description for logging
+            $changes = @()
+            if ($nameChanged) { $changes += "Name" }
+            if ($switchTypeChanged) { $changes += "SwitchType($OldSwitchType->$NewSwitchType)" }
+            if ($customImageChanged) { $changes += "CustomImage($OldCustomImage->$NewCustomImage)" }
+            Write-Log "CHANGE: $DeviceID | $($changes -join ', ')" -Level DEBUG
+
+            # Add to rename list
+            $Script:RenameList.Add([PSCustomObject]@{
+                DeviceID          = $DeviceID
+                OldName           = $OldName
+                NewName           = if ($nameChanged) { $NewName } else { $null }
+                OldSwitchType     = $OldSwitchType
+                NewSwitchType     = if ($switchTypeChanged) { $NewSwitchType } else { $null }
+                OldCustomImage    = $OldCustomImage
+                NewCustomImage    = if ($customImageChanged) { $NewCustomImage } else { $null }
+                NameChanged       = $nameChanged
+                SwitchTypeChanged = $switchTypeChanged
+                CustomImageChanged = $customImageChanged
+                Units             = $target.Units
+                OldNamesByUnit    = $target.OldNamesByUnit
+            })
+
+            # Generate one undo statement per row (only include fields that changed).
+            # Each row carries its own previous name; restoring them all from a
+            # single captured name is exactly the data loss this prevents.
+            $escapedDeviceId = ConvertTo-SqlLiteral -Value $DeviceID
+            foreach ($u in $target.Units) {
+                $unitParts = @()
+                if ($nameChanged) {
+                    $unitParts += "Name = $(ConvertTo-SqlLiteral -Value $target.OldNamesByUnit[$u])"
+                }
+                if ($switchTypeChanged) { $unitParts += "SwitchType = $OldSwitchType" }
+                if ($customImageChanged) { $unitParts += "CustomImage = $OldCustomImage" }
+                $Script:UndoStatements.Add("UPDATE DeviceStatus SET $($unitParts -join ', ') WHERE DeviceID = $escapedDeviceId AND Unit = $u;")
             }
-        }
-
-        # Build change description for logging
-        $changes = @()
-        if ($nameChanged) { $changes += "Name" }
-        if ($switchTypeChanged) { $changes += "SwitchType($OldSwitchType->$NewSwitchType)" }
-        if ($customImageChanged) { $changes += "CustomImage($OldCustomImage->$NewCustomImage)" }
-        Write-Log "CHANGE: $DeviceID | $($changes -join ', ')" -Level DEBUG
-
-        # A DeviceID can back several DeviceStatus rows. Carry every one of them
-        # so the apply and undo stages can address each row individually instead
-        # of rewriting them all through a DeviceID-only match.
-        $deviceRows = @($rowsById[$DeviceID] | Sort-Object { $_.Unit })
-        $unitList = @($deviceRows | ForEach-Object { [int]$_.Unit })
-        $oldNamesByUnit = @{}
-        foreach ($dr in $deviceRows) { $oldNamesByUnit[[int]$dr.Unit] = [string]$dr.Name }
-
-        # Add to rename list
-        $Script:RenameList.Add([PSCustomObject]@{
-            DeviceID          = $DeviceID
-            OldName           = $OldName
-            NewName           = if ($nameChanged) { $NewName } else { $null }
-            OldSwitchType     = $OldSwitchType
-            NewSwitchType     = if ($switchTypeChanged) { $NewSwitchType } else { $null }
-            OldCustomImage    = $OldCustomImage
-            NewCustomImage    = if ($customImageChanged) { $NewCustomImage } else { $null }
-            NameChanged       = $nameChanged
-            SwitchTypeChanged = $switchTypeChanged
-            CustomImageChanged = $customImageChanged
-            Units             = $unitList
-            OldNamesByUnit    = $oldNamesByUnit
-        })
-
-        # Generate one undo statement per row (only include fields that changed).
-        # Each row carries its own previous name; restoring them all from a
-        # single captured name is exactly the data loss this prevents.
-        $escapedDeviceId = ConvertTo-SqlLiteral -Value $DeviceID
-        foreach ($u in $unitList) {
-            $unitParts = @()
-            if ($nameChanged) {
-                $unitParts += "Name = $(ConvertTo-SqlLiteral -Value $oldNamesByUnit[$u])"
-            }
-            if ($switchTypeChanged) { $unitParts += "SwitchType = $OldSwitchType" }
-            if ($customImageChanged) { $unitParts += "CustomImage = $OldCustomImage" }
-            $Script:UndoStatements.Add("UPDATE DeviceStatus SET $($unitParts -join ', ') WHERE DeviceID = $escapedDeviceId AND Unit = $u;")
         }
     }
 }

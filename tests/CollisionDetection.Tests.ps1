@@ -50,11 +50,19 @@ BeforeAll {
     #             endpoint; that stale device is absent from this export but
     #             still owns the clean name, so the live endpoint-0 device can
     #             only be renamed with an endpoint suffix.
-    #   node 9  - a Central Scene remote. Domoticz keys its three key states as
-    #             ONE DeviceID with three Unit rows, and the user has named each
-    #             one differently. A single Z-Wave value cannot supply three
-    #             names, and every write matches on DeviceID alone, so renaming
-    #             would collapse all three and the undo could not restore them.
+    #   node 9  - a Central Scene remote whose value carries NO states array.
+    #             Domoticz keys its three key states as ONE DeviceID with three
+    #             Unit rows, and the user has named each one differently. With
+    #             nothing to say which unit means what, renaming would collapse
+    #             all three, so the device must be left alone.
+    #   node 10 - a Central Scene remote whose value DOES carry a states array,
+    #             stored as three identically named rows. Each unit takes its
+    #             own name from its state text.
+    #   node 11 - the same, but with three differently named rows. Used by the
+    #             undo-recovery tests: each row must get its own name, and the
+    #             undo script must put each original name back on its own row.
+    #   node 12 - a Central Scene remote with THREE rows but only TWO states.
+    #             The mapping cannot be established, so the fallback applies.
     $script:NodesJson = @'
 [
   {
@@ -89,6 +97,41 @@ BeforeAll {
     "values": [
       { "id": "9-91-0-scene-001", "label": "Scene 001" }
     ]
+  },
+  {
+    "id": 10, "loc": "Zone Foxtrot", "name": "Remote", "productLabel": "TESTREM2",
+    "values": [
+      { "id": "10-91-0-scene-001", "label": "Scene 001",
+        "states": [
+          { "value": 0, "text": "KeyPressed" },
+          { "value": 1, "text": "KeyReleased" },
+          { "value": 2, "text": "KeyHeldDown" }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 11, "loc": "Zone Golf", "name": "Remote", "productLabel": "TESTREM3",
+    "values": [
+      { "id": "11-91-0-scene-002", "label": "Scene 002",
+        "states": [
+          { "value": 0, "text": "KeyPressed" },
+          { "value": 1, "text": "KeyReleased" },
+          { "value": 2, "text": "KeyHeldDown" }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 12, "loc": "Zone Hotel", "name": "Remote", "productLabel": "TESTREM4",
+    "values": [
+      { "id": "12-91-0-scene-003", "label": "Scene 003",
+        "states": [
+          { "value": 0, "text": "KeyPressed" },
+          { "value": 1, "text": "KeyReleased" }
+        ]
+      }
+    ]
   }
 ]
 '@
@@ -101,6 +144,9 @@ BeforeAll {
     { "name": "CC48 Motion",    "pattern": "48-\\d+-Motion$",                                "replace": " - Sensor state \\(Motion\\)$", "with": " - Motion",      "description": "forces a collision with the unchanged CC113 device" },
     { "name": "Switch EP",      "pattern": "37-\\d+-currentValue$",                          "replace": " - Current value$",             "with": "",               "description": "both endpoints reduce to the same base name" },
     { "name": "CC48 Any",       "pattern": "48-\\d+-Any$",                                   "replace": " - Sensor state \\(Any\\)$",    "with": " - Motion (Binary)", "description": "unique rename, no collision" },
+    { "name": "Scene KeyPressed",  "pattern": "91-\\d+-scene-\\d+$",     "replace": " - KeyPressed$",                "with": " - Short",       "description": "mirrors the bundled Central Scene rules" },
+    { "name": "Scene KeyReleased", "pattern": "91-\\d+-scene-\\d+$",     "replace": " - KeyReleased$",               "with": " - Released",    "description": "shares a pattern with the rule above; only the replace differs" },
+    { "name": "Scene KeyHeldDown", "pattern": "91-\\d+-scene-\\d+$",     "replace": " - KeyHeldDown$",               "with": " - Held",        "description": "shares a pattern with the rules above" },
     { "name": "Scene",          "pattern": "91-\\d+-scene-\\d+$",                          "replace": " - Scene 001$",                 "with": " - Scene 1",     "description": "would collapse three differently named Domoticz rows into one" },
     { "name": "Electric Watts", "pattern": "50-\\d+-value-66049$",                           "replace": " - Electric Consumption \\[W\\]$", "with": " [W]",         "description": "collides with a stale device Domoticz kept from another endpoint" }
   ]
@@ -119,6 +165,9 @@ BeforeAll {
         'test_8-50-0-value-66049'                         = 'Zone Delta-Lamp (Zone Delta - Lamp - Electric Consumption [W])'  # live, badly named
         'test_8-50-1-value-66049'                         = 'Zone Delta - Lamp [W]'                      # stale, holds the clean name
         'test_9-91-0-scene-001'                           = 'Zone Echo - Remote - Scene 1 Pressed'       # one of three disagreeing rows
+        'test_10-91-0-scene-001'                          = 'Zone Foxtrot - Remote - Scene 001'          # three units, all identically named
+        'test_11-91-0-scene-002'                          = 'Zone Golf - Remote - Tap'                   # three units, each named differently
+        'test_12-91-0-scene-003'                          = 'Zone Hotel - Remote - Push'                 # three units, two states: unmappable
     }
 
     # Additional DeviceStatus rows that share a DeviceID with an entry above but
@@ -127,6 +176,12 @@ BeforeAll {
     $script:ExtraRows = @(
         @{ DeviceID = 'test_9-91-0-scene-001'; Name = 'Zone Echo - Remote - Scene 1 Held';     Unit = 1 }
         @{ DeviceID = 'test_9-91-0-scene-001'; Name = 'Zone Echo - Remote - Scene 1 Released'; Unit = 2 }
+        @{ DeviceID = 'test_10-91-0-scene-001'; Name = 'Zone Foxtrot - Remote - Scene 001'; Unit = 1 }
+        @{ DeviceID = 'test_10-91-0-scene-001'; Name = 'Zone Foxtrot - Remote - Scene 001'; Unit = 2 }
+        @{ DeviceID = 'test_11-91-0-scene-002'; Name = 'Zone Golf - Remote - Let go';        Unit = 1 }
+        @{ DeviceID = 'test_11-91-0-scene-002'; Name = 'Zone Golf - Remote - Long hold';     Unit = 2 }
+        @{ DeviceID = 'test_12-91-0-scene-003'; Name = 'Zone Hotel - Remote - Let go';       Unit = 1 }
+        @{ DeviceID = 'test_12-91-0-scene-003'; Name = 'Zone Hotel - Remote - Hold';         Unit = 2 }
     )
 
     # Domoticz device Type per DeviceID (82 = Temp+Humidity). Others default to 0.
@@ -160,6 +215,19 @@ BeforeAll {
             }
         }
         finally { $conn.Close() }
+    }
+
+    function Get-UnitNameList {
+        param(
+            [Parameter(Mandatory)][string]$Path,
+            [Parameter(Mandatory)][string]$DeviceID
+        )
+        $conn = Open-SqliteDatabase -Path $Path
+        try {
+            $rows = Invoke-SqliteReader -Connection $conn -Sql 'SELECT Name FROM DeviceStatus WHERE DeviceID = @id ORDER BY Unit' -Parameters @{ id = $DeviceID }
+        }
+        finally { $conn.Close() }
+        return @($rows | ForEach-Object { [string]$_.Name })
     }
 
     function Get-DeviceNameMap {
@@ -283,6 +351,35 @@ Describe 'Collision detection against the end state' -Skip:(-not $EngineAvailabl
         $names[2] | Should -Be 'Zone Echo - Remote - Scene 1 Released'
     }
 
+    It 'gives each unit of a Central Scene device its own name' {
+        $conn = Open-SqliteDatabase -Path $script:DbPath
+        try {
+            $rows = Invoke-SqliteReader -Connection $conn -Sql "SELECT Unit, Name FROM DeviceStatus WHERE DeviceID = 'test_10-91-0-scene-001' ORDER BY Unit"
+        }
+        finally { $conn.Close() }
+
+        $names = @($rows | ForEach-Object { [string]$_.Name })
+        $names[0] | Should -Be 'Zone Foxtrot - Remote - Scene 001 - Short'
+        $names[1] | Should -Be 'Zone Foxtrot - Remote - Scene 001 - Released'
+        $names[2] | Should -Be 'Zone Foxtrot - Remote - Scene 001 - Held'
+    }
+
+    It 'falls back to skipping when the row count does not match the state count' {
+        # test_12 has three rows but its value declares only two states, so the
+        # mapping cannot be established and the v2.11 guard must still apply.
+        # (test_9 covers the other fallback: a value with no states array at all.)
+        $conn = Open-SqliteDatabase -Path $script:DbPath
+        try {
+            $rows = Invoke-SqliteReader -Connection $conn -Sql "SELECT Name FROM DeviceStatus WHERE DeviceID = 'test_12-91-0-scene-003' ORDER BY Unit"
+        }
+        finally { $conn.Close() }
+
+        $names = @($rows | ForEach-Object { [string]$_.Name })
+        $names[0] | Should -Be 'Zone Hotel - Remote - Push'
+        $names[1] | Should -Be 'Zone Hotel - Remote - Let go'
+        $names[2] | Should -Be 'Zone Hotel - Remote - Hold'
+    }
+
     It 'tells the user why the ambiguous device was skipped' {
         $script:Output | Should -Match 'skipped'
         $script:Output | Should -Match 'test_9-91-0-scene-001'
@@ -324,5 +421,75 @@ Describe 'Collision detection against the end state' -Skip:(-not $EngineAvailabl
         foreach ($u in $updates) {
             $u.Value | Should -Match 'AND Unit = \d+;$'
         }
+    }
+}
+
+Describe 'Undo restores every unit its own name' -Skip:(-not $EngineAvailable) {
+    # Regression test for the data loss fixed in v2.11 and made structurally
+    # impossible in v2.12: a device whose rows were named individually used to
+    # be renamed through a DeviceID-only UPDATE, and the generated undo script
+    # matched on DeviceID alone too, so running it overwrote all three rows with
+    # whichever single name had been captured. The documented recovery path
+    # destroyed the evidence.
+    #
+    # This runs against its own fixture database so the restored names cannot
+    # disturb the end-state assertions in the Describe above.
+    BeforeAll {
+        $script:UndoWorkDir = Join-Path ([System.IO.Path]::GetTempPath()) ("renamer-undo-test-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $script:UndoWorkDir -Force | Out-Null
+
+        $script:UndoDbPath = Join-Path $script:UndoWorkDir 'db.db'
+        $json  = Join-Path $script:UndoWorkDir 'nodes.json'
+        $rules = Join-Path $script:UndoWorkDir 'rules.json'
+
+        Set-Content -LiteralPath $json  -Value $script:NodesJson -Encoding utf8
+        Set-Content -LiteralPath $rules -Value $script:RulesJson -Encoding utf8
+        New-TestDatabase -Path $script:UndoDbPath
+
+        $null = & pwsh -NoProfile -File $script:ScriptPath -JsonFile $json -DbPath $script:UndoDbPath -RulesFile $rules -Force -NoBackup 2>&1
+
+        # The three rows of test_11 start out named differently and are renamed
+        # per unit, which is exactly the case a DeviceID-only undo cannot undo.
+        $script:RenamedNames = @(Get-UnitNameList -Path $script:UndoDbPath -DeviceID 'test_11-91-0-scene-002')
+
+        $undoFile = Get-ChildItem -LiteralPath $script:UndoWorkDir -Filter 'undo_rename-*.sql' | Select-Object -First 1
+        $script:UndoSql = if ($undoFile) { Get-Content -LiteralPath $undoFile.FullName -Raw } else { $null }
+        if ($script:UndoSql) {
+            $conn = Open-SqliteDatabase -Path $script:UndoDbPath
+            try {
+                foreach ($line in ($script:UndoSql -split "`r?`n")) {
+                    $stmt = $line.Trim()
+                    if ($stmt -eq '' -or $stmt.StartsWith('--')) { continue }
+                    [void](Invoke-SqliteNonQuery -Connection $conn -Sql $stmt)
+                }
+            }
+            finally { $conn.Close() }
+        }
+        $script:RestoredNames = @(Get-UnitNameList -Path $script:UndoDbPath -DeviceID 'test_11-91-0-scene-002')
+    }
+
+    AfterAll {
+        if ($script:UndoWorkDir -and (Test-Path -LiteralPath $script:UndoWorkDir)) {
+            Remove-Item -LiteralPath $script:UndoWorkDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'renamed all three differently named rows to their own state names first' {
+        # Without this the recovery assertion below would pass vacuously against
+        # a run that never touched the device.
+        $script:RenamedNames[0] | Should -Be 'Zone Golf - Remote - Scene 002 - Short'
+        $script:RenamedNames[1] | Should -Be 'Zone Golf - Remote - Scene 002 - Released'
+        $script:RenamedNames[2] | Should -Be 'Zone Golf - Remote - Scene 002 - Held'
+    }
+
+    It 'puts every original name back on its own unit' {
+        # A DeviceID-only undo would leave all three rows holding one name.
+        $script:RestoredNames[0] | Should -Be 'Zone Golf - Remote - Tap'
+        $script:RestoredNames[1] | Should -Be 'Zone Golf - Remote - Let go'
+        $script:RestoredNames[2] | Should -Be 'Zone Golf - Remote - Long hold'
+    }
+
+    It 'restores three distinct names, not three copies of one' {
+        @($script:RestoredNames | Sort-Object -Unique).Count | Should -Be 3
     }
 }
