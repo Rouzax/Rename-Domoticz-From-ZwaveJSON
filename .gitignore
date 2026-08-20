@@ -30,5 +30,8 @@ lib/
 # Built docs site (zensical build)
 site/
 
+# Docs toolchain venv (provisioned by pip install -r requirements-docs.txt)
+.venv-docs/
+
 # Git worktrees for isolated feature work
 .worktrees/

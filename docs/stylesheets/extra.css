@@ -1,0 +1,23 @@
+/* Palette lifted from the tool's own HTML report (the inline CSS in
+   Rename-Domoticz-From-ZwaveJSON.ps1, --accent: #e94560), so the report and
+   the docs read as one project.
+
+   The raw accent fails WCAG AA for normal text on BOTH schemes
+   (3.83:1 on white, 4.12:1 on slate), so each scheme gets an adjusted value.
+   Do not "fix" these back to #e94560; that reintroduces the failure. */
+
+/* light: #d63652 on #ffffff = 4.66:1, passes AA */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color:        #d63652;
+  --md-primary-fg-color--light: #e0596f;
+  --md-primary-fg-color--dark:  #b81f3f;
+  --md-accent-fg-color:         #b81f3f;
+}
+
+/* dark: #f4707f on #21222c = 5.62:1, passes AA */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color:        #f4707f;
+  --md-primary-fg-color--light: #f8919c;
+  --md-primary-fg-color--dark:  #e94560;
+  --md-accent-fg-color:         #f8919c;
+}
