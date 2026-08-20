@@ -665,6 +665,13 @@ function Get-UnitStateMap {
     $map = @{}
     foreach ($s in $states) {
         if (-not $s.PSObject.Properties['value'] -or -not $s.PSObject.Properties['text']) { return $null }
+        # The value must be a whole number, and nothing guarantees that it is.
+        # A JSON null passes the property check above and would cast to 0,
+        # quietly mapping a unit to the wrong state, which is the mislabelling
+        # this whole function exists to prevent. A non-numeric value would throw
+        # on the cast and, under $ErrorActionPreference = 'Stop', abort the run
+        # instead of falling back. Both must return $null like any other doubt.
+        if ($s.value -isnot [int] -and -not [int]::TryParse([string]$s.value, [ref]$null)) { return $null }
         $map[[int]$s.value] = [string]$s.text
     }
     foreach ($u in $Units) {
@@ -2192,30 +2199,51 @@ foreach ($Device in $ZwaveData) {
             })
         }
 
+        # Work out every target's proposed name before handling any of them.
+        # Collision handling below frees a target's old name from $proposedNames
+        # when it moves away, which is only safe if no OTHER target of this
+        # device keeps that same name: several rows of one device can share an
+        # old name, and a row that keeps it still holds it in the database.
+        $retainedOldNames = [System.Collections.Generic.HashSet[string]]::new()
         foreach ($target in $unitTargets) {
             # The state suffix is part of the name handed to the rules engine, so
             # an installation can rewrite the raw Z-Wave state text to whatever
             # it wants to see in Domoticz without touching this script.
-            $NewName = "$baseName$($target.Suffix)"
+            $proposedName = "$baseName$($target.Suffix)"
 
             # Get transformed name and any switchType/customImage from matched rule
-            $transformResult = Get-TransformedDeviceName -DeviceID $DeviceID -NewName $NewName -Rules $RenamingRules -NodeData $nodeData
-            $NewName = $transformResult.Name
-            $NewSwitchType = $transformResult.SwitchType
-            $NewCustomImage = $transformResult.CustomImage
+            $transformResult = Get-TransformedDeviceName -DeviceID $DeviceID -NewName $proposedName -Rules $RenamingRules -NodeData $nodeData
+            $proposedName = $transformResult.Name
+
+            # Preserve "$" prefix
+            if ($target.OldName -match '^\$' -and $proposedName -notmatch '^\$') {
+                $proposedName = "`$" + $proposedName
+            }
+
+            $target.NewName = $proposedName
+            $target.NewSwitchType = $transformResult.SwitchType
+            $target.NewCustomImage = $transformResult.CustomImage
+
+            # Normalize for comparison
+            $target.OldNameNorm = (([string]$target.OldName) -replace '\s{2,}', ' ').Trim()
+            $target.NewNameNorm = ($proposedName -replace '\s{2,}', ' ').Trim()
+
+            if ($target.OldNameNorm -eq $target.NewNameNorm) {
+                [void]$retainedOldNames.Add($target.OldNameNorm)
+            }
+        }
+
+        foreach ($target in $unitTargets) {
+            $NewName = $target.NewName
+            $NewSwitchType = $target.NewSwitchType
+            $NewCustomImage = $target.NewCustomImage
 
             $OldName = $target.OldName
             $OldSwitchType = $target.OldSwitchType
             $OldCustomImage = $target.OldCustomImage
 
-            # Preserve "$" prefix
-            if ($OldName -match '^\$' -and $NewName -notmatch '^\$') {
-                $NewName = "`$" + $NewName
-            }
-
-            # Normalize for comparison
-            $OldNameNorm = ($OldName -replace '\s{2,}', ' ').Trim()
-            $NewNameNorm = ($NewName -replace '\s{2,}', ' ').Trim()
+            $OldNameNorm = $target.OldNameNorm
+            $NewNameNorm = $target.NewNameNorm
 
             # Check what needs to change
             $nameChanged = ($OldNameNorm -ne $NewNameNorm)
@@ -2271,7 +2299,7 @@ foreach ($Device in $ZwaveData) {
                         [void]$pendingNames.Add("$NewNameNorm - EP$existingEndpoint")
 
                         # Free this device's old name and register its disambiguated name
-                        if ($proposedNames[$OldNameNorm] -eq $DeviceID) { $proposedNames.Remove($OldNameNorm); [void]$pendingNames.Remove($OldNameNorm) }
+                        if ($proposedNames[$OldNameNorm] -eq $DeviceID -and -not $retainedOldNames.Contains($OldNameNorm)) { $proposedNames.Remove($OldNameNorm); [void]$pendingNames.Remove($OldNameNorm) }
                         $NewName = "$NewName - EP$currentEndpoint"
                         $NewNameNorm = $disambiguatedNorm
                         $proposedNames[$NewNameNorm] = $DeviceID
@@ -2289,7 +2317,7 @@ foreach ($Device in $ZwaveData) {
                     elseif ($endpointsDiffer -and -not $proposedNames.ContainsKey($disambiguatedNorm)) {
                         # Existing owner keeps its name (not a pending rename). Leave it
                         # alone and disambiguate only THIS device with its endpoint.
-                        if ($proposedNames[$OldNameNorm] -eq $DeviceID) { $proposedNames.Remove($OldNameNorm); [void]$pendingNames.Remove($OldNameNorm) }
+                        if ($proposedNames[$OldNameNorm] -eq $DeviceID -and -not $retainedOldNames.Contains($OldNameNorm)) { $proposedNames.Remove($OldNameNorm); [void]$pendingNames.Remove($OldNameNorm) }
                         $NewName = "$NewName - EP$currentEndpoint"
                         $NewNameNorm = $disambiguatedNorm
                         $proposedNames[$NewNameNorm] = $DeviceID
@@ -2320,7 +2348,7 @@ foreach ($Device in $ZwaveData) {
                 }
                 else {
                     # Free this device's old name (it is moving) and claim the new one.
-                    if ($proposedNames[$OldNameNorm] -eq $DeviceID) { $proposedNames.Remove($OldNameNorm); [void]$pendingNames.Remove($OldNameNorm) }
+                    if ($proposedNames[$OldNameNorm] -eq $DeviceID -and -not $retainedOldNames.Contains($OldNameNorm)) { $proposedNames.Remove($OldNameNorm); [void]$pendingNames.Remove($OldNameNorm) }
                     $proposedNames[$NewNameNorm] = $DeviceID
                     [void]$pendingNames.Add($NewNameNorm)
                 }

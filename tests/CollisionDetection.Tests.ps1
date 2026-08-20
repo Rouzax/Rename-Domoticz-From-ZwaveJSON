@@ -63,6 +63,17 @@ BeforeAll {
     #             undo script must put each original name back on its own row.
     #   node 12 - a Central Scene remote with THREE rows but only TWO states.
     #             The mapping cannot be established, so the fallback applies.
+    #   node 13 - three rows and three states, but one state's `value` is null.
+    #             It would cast to 0 and map unit 0 to the wrong state text.
+    #   node 14 - three rows and three states whose `value` is a non-numeric
+    #             string. Casting it to int throws, and under
+    #             $ErrorActionPreference = 'Stop' that would abort the run.
+    #   node 15 - three rows that SHARE one name, where unit 0's computed name
+    #             equals that name. Units 1 and 2 move away; the shared name is
+    #             still held by unit 0 and must stay unavailable.
+    #   node 16 - a device on another endpoint that wants exactly the name node
+    #             15's unit 0 keeps. It must be disambiguated, not silently
+    #             allowed to duplicate that name.
     $script:NodesJson = @'
 [
   {
@@ -132,6 +143,48 @@ BeforeAll {
         ]
       }
     ]
+  },
+  {
+    "id": 13, "loc": "Zone India", "name": "Remote", "productLabel": "TESTREM5",
+    "values": [
+      { "id": "13-91-0-scene-004", "label": "Scene 004",
+        "states": [
+          { "value": null, "text": "KeyHeldDown" },
+          { "value": 1, "text": "KeyReleased" },
+          { "value": 2, "text": "KeyPressed" }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 14, "loc": "Zone Juliet", "name": "Remote", "productLabel": "TESTREM6",
+    "values": [
+      { "id": "14-91-0-scene-005", "label": "Scene 005",
+        "states": [
+          { "value": "zero", "text": "KeyPressed" },
+          { "value": "one", "text": "KeyReleased" },
+          { "value": "two", "text": "KeyHeldDown" }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 15, "loc": "Zone Kilo", "name": "Remote", "productLabel": "TESTREM7",
+    "values": [
+      { "id": "15-91-0-scene-006", "label": "Scene 006",
+        "states": [
+          { "value": 0, "text": "KeyPressed" },
+          { "value": 1, "text": "KeyReleased" },
+          { "value": 2, "text": "KeyHeldDown" }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 16, "loc": "Zone Kilo", "name": "Remote", "productLabel": "TESTSENS",
+    "values": [
+      { "id": "16-49-1-Custom", "label": "Scene 006 - Short" }
+    ]
   }
 ]
 '@
@@ -168,6 +221,10 @@ BeforeAll {
         'test_10-91-0-scene-001'                          = 'Zone Foxtrot - Remote - Scene 001'          # three units, all identically named
         'test_11-91-0-scene-002'                          = 'Zone Golf - Remote - Tap'                   # three units, each named differently
         'test_12-91-0-scene-003'                          = 'Zone Hotel - Remote - Push'                 # three units, two states: unmappable
+        'test_13-91-0-scene-004'                          = 'Zone India - Remote - A'                    # three units, one state value is null
+        'test_14-91-0-scene-005'                          = 'Zone Juliet - Remote - A'                   # three units, state values are not numbers
+        'test_15-91-0-scene-006'                          = 'Zone Kilo - Remote - Scene 006 - Short'     # three units sharing one name; unit 0 keeps it
+        'test_16-49-1-Custom'                             = 'Zone Kilo - Remote - Old Y'                 # wants the name unit 0 of node 15 keeps
     }
 
     # Additional DeviceStatus rows that share a DeviceID with an entry above but
@@ -182,6 +239,12 @@ BeforeAll {
         @{ DeviceID = 'test_11-91-0-scene-002'; Name = 'Zone Golf - Remote - Long hold';     Unit = 2 }
         @{ DeviceID = 'test_12-91-0-scene-003'; Name = 'Zone Hotel - Remote - Let go';       Unit = 1 }
         @{ DeviceID = 'test_12-91-0-scene-003'; Name = 'Zone Hotel - Remote - Hold';         Unit = 2 }
+        @{ DeviceID = 'test_13-91-0-scene-004'; Name = 'Zone India - Remote - B';            Unit = 1 }
+        @{ DeviceID = 'test_13-91-0-scene-004'; Name = 'Zone India - Remote - C';            Unit = 2 }
+        @{ DeviceID = 'test_14-91-0-scene-005'; Name = 'Zone Juliet - Remote - B';           Unit = 1 }
+        @{ DeviceID = 'test_14-91-0-scene-005'; Name = 'Zone Juliet - Remote - C';           Unit = 2 }
+        @{ DeviceID = 'test_15-91-0-scene-006'; Name = 'Zone Kilo - Remote - Scene 006 - Short'; Unit = 1 }
+        @{ DeviceID = 'test_15-91-0-scene-006'; Name = 'Zone Kilo - Remote - Scene 006 - Short'; Unit = 2 }
     )
 
     # Domoticz device Type per DeviceID (82 = Temp+Humidity). Others default to 0.
@@ -378,6 +441,51 @@ Describe 'Collision detection against the end state' -Skip:(-not $EngineAvailabl
         $names[0] | Should -Be 'Zone Hotel - Remote - Push'
         $names[1] | Should -Be 'Zone Hotel - Remote - Let go'
         $names[2] | Should -Be 'Zone Hotel - Remote - Hold'
+    }
+
+    It 'falls back to skipping when a state value is not a whole number' {
+        # A null state value passes a bare property check and casts to 0, which
+        # would map unit 0 to the wrong state text; a non-numeric one throws on
+        # the cast and, with $ErrorActionPreference = 'Stop', would abort the
+        # entire run. Both are doubt, so both must fall back to the skip.
+        $conn = Open-SqliteDatabase -Path $script:DbPath
+        try {
+            $nullValued = Invoke-SqliteReader -Connection $conn -Sql "SELECT Name FROM DeviceStatus WHERE DeviceID = 'test_13-91-0-scene-004' ORDER BY Unit"
+            $textValued = Invoke-SqliteReader -Connection $conn -Sql "SELECT Name FROM DeviceStatus WHERE DeviceID = 'test_14-91-0-scene-005' ORDER BY Unit"
+        }
+        finally { $conn.Close() }
+
+        @($nullValued | ForEach-Object { [string]$_.Name }) | Should -Be @(
+            'Zone India - Remote - A', 'Zone India - Remote - B', 'Zone India - Remote - C')
+        @($textValued | ForEach-Object { [string]$_.Name }) | Should -Be @(
+            'Zone Juliet - Remote - A', 'Zone Juliet - Remote - B', 'Zone Juliet - Remote - C')
+    }
+
+    It 'completes the run instead of aborting on an unusable state value' {
+        # The fallback is only a fallback if the run survives it.
+        $script:Output | Should -Match 'Summary'
+        $script:Output | Should -Not -Match 'Cannot convert'
+    }
+
+    It 'keeps a name that another unit of the same device still holds' {
+        # Three rows share one name and unit 0's computed name equals it, so
+        # unit 0 keeps it while units 1 and 2 move away. Freeing the shared name
+        # when unit 1 moved would let another device claim a name unit 0 still
+        # holds, which is the duplicate collision detection exists to prevent.
+        $conn = Open-SqliteDatabase -Path $script:DbPath
+        try {
+            $rows = Invoke-SqliteReader -Connection $conn -Sql "SELECT Name FROM DeviceStatus WHERE DeviceID = 'test_15-91-0-scene-006' ORDER BY Unit"
+        }
+        finally { $conn.Close() }
+
+        $names = @($rows | ForEach-Object { [string]$_.Name })
+        $names[0] | Should -Be 'Zone Kilo - Remote - Scene 006 - Short'
+        $names[1] | Should -Be 'Zone Kilo - Remote - Scene 006 - Released'
+        $names[2] | Should -Be 'Zone Kilo - Remote - Scene 006 - Held'
+
+        # The device that wanted that name sits on another endpoint, so it is
+        # disambiguated rather than being allowed to duplicate the name.
+        $script:Names['test_16-49-1-Custom'] | Should -Be 'Zone Kilo - Remote - Scene 006 - Short - EP1'
     }
 
     It 'tells the user why the ambiguous device was skipped' {
