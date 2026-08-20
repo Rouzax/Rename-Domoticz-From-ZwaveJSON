@@ -31,11 +31,18 @@ Automatically rename your Domoticz devices based on the room and device names co
    .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "http://zwave-host:8091" -DbPath "domoticz.db"
    ```
 
-**Alternative: skip the full clone.** Every release also syncs a
-runtime-only `dist` branch containing just the files needed to run the
-tool (script, `setup.ps1`, `rename_rules.json`, `modules/`, this readme,
-no docs, tests, or CI config). `git clone -b dist` it once, then `git pull`
-on that branch to pick up future releases.
+**Getting the files:** the `dist` branch carries only what is needed to run
+the tool, with no docs source, tests or CI config:
+
+```powershell
+git clone -b dist https://github.com/Rouzax/Rename-Domoticz-From-ZwaveJSON.git
+cd Rename-Domoticz-From-ZwaveJSON
+```
+
+It is re-synced on every release, so `git pull` on that branch moves you to the
+newest one. Clone without `-b dist` instead if you want the tests and docs
+source. See [Installation](https://rouzax.github.io/Rename-Domoticz-From-ZwaveJSON/getting-started/installation/)
+for the full comparison.
 
 ---
 
