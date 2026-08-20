@@ -23,6 +23,11 @@ nav = [
     { "Name collisions" = "using/collisions.md" },
     { "Reverting changes" = "using/reverting.md" },
   ]},
+  { "Renaming rules" = [
+    { "How naming works" = "rules/naming.md" },
+    { "Writing your own rules" = "rules/writing-rules.md" },
+    { "Lookup tables" = "rules/lookup-tables.md" },
+  ]},
 ]
 
 [project.theme]
