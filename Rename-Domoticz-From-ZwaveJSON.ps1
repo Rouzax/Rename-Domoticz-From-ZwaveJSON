@@ -1864,7 +1864,7 @@ try {
     # Used and LastUpdate are not needed to rename anything; they are carried so
     # a name collision can report whether the device holding the contested name
     # is still alive (see Get-CollisionBlame).
-    $rows = Invoke-SqliteReader -Connection $DbConn -Sql "SELECT DeviceID, Name, SwitchType, CustomImage, Type, Used, LastUpdate FROM DeviceStatus"
+    $rows = Invoke-SqliteReader -Connection $DbConn -Sql "SELECT DeviceID, Unit, Name, SwitchType, CustomImage, Type, Used, LastUpdate FROM DeviceStatus"
 
     # A DeviceID is not unique in DeviceStatus: Domoticz keys multi-unit devices
     # (Central Scene remotes, for example) as one DeviceID with several Unit
@@ -1879,6 +1879,7 @@ try {
         $rid = [string]$r.DeviceID
         $entry = @{
             Name        = [string]$r.Name
+            Unit        = [int]$r.Unit
             SwitchType  = [int]$r.SwitchType
             CustomImage = [int]$r.CustomImage
             Type        = [int]$r.Type
@@ -2229,6 +2230,14 @@ foreach ($Device in $ZwaveData) {
         if ($customImageChanged) { $changes += "CustomImage($OldCustomImage->$NewCustomImage)" }
         Write-Log "CHANGE: $DeviceID | $($changes -join ', ')" -Level DEBUG
 
+        # A DeviceID can back several DeviceStatus rows. Carry every one of them
+        # so the apply and undo stages can address each row individually instead
+        # of rewriting them all through a DeviceID-only match.
+        $deviceRows = @($rowsById[$DeviceID] | Sort-Object { $_.Unit })
+        $unitList = @($deviceRows | ForEach-Object { [int]$_.Unit })
+        $oldNamesByUnit = @{}
+        foreach ($dr in $deviceRows) { $oldNamesByUnit[[int]$dr.Unit] = [string]$dr.Name }
+
         # Add to rename list
         $Script:RenameList.Add([PSCustomObject]@{
             DeviceID          = $DeviceID
@@ -2241,22 +2250,23 @@ foreach ($Device in $ZwaveData) {
             NameChanged       = $nameChanged
             SwitchTypeChanged = $switchTypeChanged
             CustomImageChanged = $customImageChanged
+            Units             = $unitList
+            OldNamesByUnit    = $oldNamesByUnit
         })
 
-        # Generate undo statement (only include fields that changed)
-        $undoParts = @()
-        if ($nameChanged) {
-            $escapedOldName = ConvertTo-SqlLiteral -Value $OldName
-            $undoParts += "Name = $escapedOldName"
-        }
-        if ($switchTypeChanged) {
-            $undoParts += "SwitchType = $OldSwitchType"
-        }
-        if ($customImageChanged) {
-            $undoParts += "CustomImage = $OldCustomImage"
-        }
+        # Generate one undo statement per row (only include fields that changed).
+        # Each row carries its own previous name; restoring them all from a
+        # single captured name is exactly the data loss this prevents.
         $escapedDeviceId = ConvertTo-SqlLiteral -Value $DeviceID
-        $Script:UndoStatements.Add("UPDATE DeviceStatus SET $($undoParts -join ', ') WHERE DeviceID = $escapedDeviceId;")
+        foreach ($u in $unitList) {
+            $unitParts = @()
+            if ($nameChanged) {
+                $unitParts += "Name = $(ConvertTo-SqlLiteral -Value $oldNamesByUnit[$u])"
+            }
+            if ($switchTypeChanged) { $unitParts += "SwitchType = $OldSwitchType" }
+            if ($customImageChanged) { $unitParts += "CustomImage = $OldCustomImage" }
+            $Script:UndoStatements.Add("UPDATE DeviceStatus SET $($unitParts -join ', ') WHERE DeviceID = $escapedDeviceId AND Unit = $u;")
+        }
     }
 }
 
@@ -2448,8 +2458,13 @@ else {
                         $sqlParams.NewCustomImage = $item.NewCustomImage
                     }
 
-                    $updateQuery = "UPDATE DeviceStatus SET $($setParts -join ', ') WHERE DeviceID = @DeviceID"
-                    [void](Invoke-SqliteNonQuery -Connection $DbConn -Sql $updateQuery -Parameters $sqlParams)
+                    # One statement per row. A DeviceID-only match would hit every
+                    # unit of a multi-unit device and collapse their names.
+                    foreach ($u in $item.Units) {
+                        $sqlParams.UnitNo = $u
+                        $updateQuery = "UPDATE DeviceStatus SET $($setParts -join ', ') WHERE DeviceID = @DeviceID AND Unit = @UnitNo"
+                        [void](Invoke-SqliteNonQuery -Connection $DbConn -Sql $updateQuery -Parameters $sqlParams)
+                    }
 
                     # Update cached data
                     if ($item.NameChanged) {

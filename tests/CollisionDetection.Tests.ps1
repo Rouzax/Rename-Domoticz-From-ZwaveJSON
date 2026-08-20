@@ -311,4 +311,18 @@ Describe 'Collision detection against the end state' -Skip:(-not $EngineAvailabl
             ForEach-Object { $_.Name }
         $duplicates | Should -BeNullOrEmpty
     }
+
+    It 'writes an undo statement per unit, carrying that unit own old name' {
+        $undo = Get-ChildItem -LiteralPath $script:WorkDir -Filter 'undo_rename-*.sql' | Select-Object -First 1
+        $undo | Should -Not -BeNullOrEmpty
+        $sql = Get-Content -LiteralPath $undo.FullName -Raw
+
+        # Every generated UPDATE must scope to a single row. A statement matching
+        # on DeviceID alone would rewrite every unit of a multi-unit device.
+        $updates = [regex]::Matches($sql, 'UPDATE DeviceStatus SET .*?;')
+        $updates.Count | Should -BeGreaterThan 0
+        foreach ($u in $updates) {
+            $u.Value | Should -Match 'AND Unit = \d+;$'
+        }
+    }
 }
