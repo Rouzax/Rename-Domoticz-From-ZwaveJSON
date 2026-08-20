@@ -177,6 +177,18 @@ Exclude devices matching a pattern:
 
 The script detects when a rename would collide with **any** device in the final state, including devices that keep their current name, not just clashes between two proposed renames. Collisions on different endpoints are auto-resolved by appending the endpoint number (e.g. ` - EP2`, ` - EP3`). Collisions on the same endpoint (or against a device that keeps its name) are reported and skipped, so the script never writes a duplicate name.
 
+Every collision is explained rather than just counted. The HTML report's **Names Disambiguated** section shows, for each one, the device that wanted the name and the device holding it, along with whether the node source still reports that device and its Domoticz `Used` flag and `LastUpdate`:
+
+```
+Living Room - Lamp [W]                 Endpoint suffix EP0 appended
+  WANTED BY  zwavejs2mqtt_0xc15d8aa6_24-50-0-value-66049  [in node source]
+  HELD BY    zwavejs2mqtt_0xc15d8aa6_24-50-1-value-66049  [not in node source, Used=0, last update 2026-05-14 00:06]
+```
+
+A device Domoticz kept after a Z-Wave value moved endpoint (or disappeared) still owns its name and blocks the live device from getting it. Deleting that stale device in Domoticz (Setup → Devices) and re-running gives the live device the clean name.
+
+Treat "not in node source" as a strong hint, not proof. zwave-js only creates notification, battery and smoke sub-values after a node first reports them, so a healthy but quiet device can be absent from the source; `Used` and `LastUpdate` are shown so you can judge each case.
+
 ### ↩️ Undo Script Generation
 
 An SQL undo script is automatically generated, allowing you to revert changes:
@@ -555,6 +567,7 @@ sqlite3 C:\Domoticz\domoticz.db < C:\Domoticz\undo_rename-25.01.30-14.30.45.sql
 | **"DeviceID not found"** | Check that JSON IDs match Domoticz DB IDs (spaces → underscores). In live mode (`-ZwaveJsUrl`), this usually means Hass/MQTT discovery is not enabled in zwave-js-ui |
 | **"Base Identifier not found"** | Verify your JSON export has `identifiers` under `hassDevices`. In live mode (`-ZwaveJsUrl`), this means Hass/MQTT discovery must be enabled in zwave-js-ui, since the base identifier comes from the discovery payload |
 | **"Name collision detected"** | Multi-endpoint collisions are auto-resolved with endpoint numbers; unresolvable collisions are skipped |
+| **A device was renamed with an unexpected ` - EP0` suffix** | Another device already holds the clean name. See **Names Disambiguated** in the HTML report: if the holder is marked "not in node source" it is a leftover Domoticz device, so delete it (Setup → Devices) and re-run |
 | **Logs/CSV not where expected** | Check console output for actual paths; falls back: Script → DB → TEMP |
 
 ---

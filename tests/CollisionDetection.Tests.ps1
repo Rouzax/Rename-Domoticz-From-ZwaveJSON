@@ -45,6 +45,11 @@ BeforeAll {
     #   node 6  - a two-channel switch whose endpoints 1 and 2 both reduce to the
     #             same base name -> auto-resolvable by endpoint suffix.
     #   node 7  - a PIR whose CC48 device renames uniquely (no collision).
+    #   node 8  - a dimmer reporting its meter on endpoint 0. Domoticz still
+    #             holds a device for endpoint 1 from before the value moved
+    #             endpoint; that stale device is absent from this export but
+    #             still owns the clean name, so the live endpoint-0 device can
+    #             only be renamed with an endpoint suffix.
     $script:NodesJson = @'
 [
   {
@@ -67,6 +72,12 @@ BeforeAll {
     "values": [
       { "id": "7-48-0-Any", "label": "Sensor state (Any)" }
     ]
+  },
+  {
+    "id": 8, "loc": "Zone Delta", "name": "Lamp", "productLabel": "TESTDIM",
+    "values": [
+      { "id": "8-50-0-value-66049", "label": "Electric Consumption [W]" }
+    ]
   }
 ]
 '@
@@ -78,7 +89,8 @@ BeforeAll {
     { "name": "Motion Sensor",  "pattern": "113-\\d+-Home_Security-Motion_sensor_status$", "replace": " - Motion sensor status$",  "with": " - Motion",          "description": "keeps CC113 device at its existing name" },
     { "name": "CC48 Motion",    "pattern": "48-\\d+-Motion$",                                "replace": " - Sensor state \\(Motion\\)$", "with": " - Motion",      "description": "forces a collision with the unchanged CC113 device" },
     { "name": "Switch EP",      "pattern": "37-\\d+-currentValue$",                          "replace": " - Current value$",             "with": "",               "description": "both endpoints reduce to the same base name" },
-    { "name": "CC48 Any",       "pattern": "48-\\d+-Any$",                                   "replace": " - Sensor state \\(Any\\)$",    "with": " - Motion (Binary)", "description": "unique rename, no collision" }
+    { "name": "CC48 Any",       "pattern": "48-\\d+-Any$",                                   "replace": " - Sensor state \\(Any\\)$",    "with": " - Motion (Binary)", "description": "unique rename, no collision" },
+    { "name": "Electric Watts", "pattern": "50-\\d+-value-66049$",                           "replace": " - Electric Consumption \\[W\\]$", "with": " [W]",         "description": "collides with a stale device Domoticz kept from another endpoint" }
   ]
 }
 '@
@@ -92,20 +104,33 @@ BeforeAll {
         'test_6-37-2-currentValue'                        = 'Zone Bravo - Lamp - Current value'          # pending, endpoint 2
         'test_7-48-0-Any'                                 = 'Zone Charlie - PIR - Sensor state (Any)'    # clean rename
         'test_node5'                                      = 'Zone Alpha-PIR'                             # node-level combined Temp+Hum device
+        'test_8-50-0-value-66049'                         = 'Zone Delta-Lamp (Zone Delta - Lamp - Electric Consumption [W])'  # live, badly named
+        'test_8-50-1-value-66049'                         = 'Zone Delta - Lamp [W]'                      # stale, holds the clean name
     }
 
     # Domoticz device Type per DeviceID (82 = Temp+Humidity). Others default to 0.
     $script:DeviceTypes = @{ 'test_node5' = 82 }
+
+    # Used / LastUpdate per DeviceID, for devices that should not look healthy.
+    # The stale endpoint-1 meter is what a device left behind by Domoticz looks
+    # like: dropped from the dashboard, and not updated for days.
+    $script:DeviceMeta = @{
+        'test_8-50-1-value-66049' = @{ Used = 0; LastUpdate = '2020-03-04 05:06:07' }
+    }
 
     function New-TestDatabase {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Test helper writing a throwaway fixture database; nothing to confirm.')]
         param([Parameter(Mandatory)][string]$Path)
         $conn = Open-SqliteDatabase -Path $Path -CreateIfMissing
         try {
-            [void](Invoke-SqliteNonQuery -Connection $conn -Sql 'CREATE TABLE DeviceStatus (DeviceID TEXT, Name TEXT, SwitchType INTEGER, CustomImage INTEGER, Type INTEGER)')
+            # Used and LastUpdate mirror the real Domoticz DeviceStatus schema.
+            # The renamer reads them to describe a device that is holding a
+            # contested name; without them the fixture no longer matches reality.
+            [void](Invoke-SqliteNonQuery -Connection $conn -Sql 'CREATE TABLE DeviceStatus (DeviceID TEXT, Name TEXT, SwitchType INTEGER, CustomImage INTEGER, Type INTEGER, Used INTEGER, LastUpdate TEXT)')
             foreach ($id in $script:OriginalNames.Keys) {
                 $type = if ($script:DeviceTypes.ContainsKey($id)) { $script:DeviceTypes[$id] } else { 0 }
-                [void](Invoke-SqliteNonQuery -Connection $conn -Sql 'INSERT INTO DeviceStatus (DeviceID, Name, SwitchType, CustomImage, Type) VALUES (@id, @name, 8, 0, @type)' -Parameters @{ id = $id; name = $script:OriginalNames[$id]; type = $type })
+                $meta = if ($script:DeviceMeta.ContainsKey($id)) { $script:DeviceMeta[$id] } else { @{ Used = 1; LastUpdate = '2026-01-01 00:00:00' } }
+                [void](Invoke-SqliteNonQuery -Connection $conn -Sql 'INSERT INTO DeviceStatus (DeviceID, Name, SwitchType, CustomImage, Type, Used, LastUpdate) VALUES (@id, @name, 8, 0, @type, @used, @lastUpdate)' -Parameters @{ id = $id; name = $script:OriginalNames[$id]; type = $type; used = $meta.Used; lastUpdate = $meta.LastUpdate })
             }
         }
         finally { $conn.Close() }
@@ -173,6 +198,44 @@ Describe 'Collision detection against the end state' -Skip:(-not $EngineAvailabl
         # test_node5 (Domoticz Type 82) has no Z-Wave value; it is renamed via the
         # synthetic node-level target, with a Climate label for Temp+Humidity.
         $script:Names['test_node5'] | Should -Be 'Zone Alpha - PIR - Climate'
+    }
+
+    It 'disambiguates a live device blocked by a stale device Domoticz kept' {
+        # The stale endpoint-1 meter is not in the export, so it is never visited
+        # and keeps its name. The live endpoint-0 meter therefore cannot have the
+        # clean name and is disambiguated with its own endpoint instead.
+        $script:Names['test_8-50-1-value-66049'] | Should -Be 'Zone Delta - Lamp [W]'
+        $script:Names['test_8-50-0-value-66049'] | Should -Be 'Zone Delta - Lamp [W] - EP0'
+    }
+
+    It 'names the stale device that blocked the clean name' {
+        # Without this the endpoint suffix is unexplainable: the report has to say
+        # WHICH device holds the name and that the node source no longer knows it,
+        # otherwise the only fix (delete that device) is undiscoverable.
+        $script:Output | Should -Match 'no longer in the node source'
+        $script:Output | Should -Match 'test_8-50-1-value-66049'
+        $script:Output | Should -Match 'Used=0'
+        $script:Output | Should -Match '2020-03-04 05:06:07'
+    }
+
+    It 'explains the disambiguation in the HTML report' {
+        $report = Get-ChildItem -LiteralPath $script:WorkDir -Filter 'rename_report-*.html' | Select-Object -First 1
+        $report | Should -Not -BeNullOrEmpty
+        $html = Get-Content -LiteralPath $report.FullName -Raw
+
+        $html | Should -Match 'Names Disambiguated'
+        $html | Should -Match 'test_8-50-1-value-66049'
+        $html | Should -Match 'not in node source'
+        # The live device must NOT be reported as stale.
+        $html | Should -Match 'blame-status live'
+    }
+
+    It 'does not skip a device whose collision was auto-resolved' {
+        # Auto-resolved collisions are tracked separately from unresolvable ones
+        # precisely because the unresolvable list drives the skip filter. If the
+        # two were merged, these devices would silently keep their old names.
+        $script:Names['test_6-37-1-currentValue'] | Should -Not -Match 'Current value'
+        $script:Names['test_8-50-0-value-66049'] | Should -Not -Match '^Zone Delta-Lamp'
     }
 
     It 'leaves no duplicate device names in the end state' {

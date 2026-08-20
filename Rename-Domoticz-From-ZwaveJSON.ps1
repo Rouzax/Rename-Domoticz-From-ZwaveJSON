@@ -103,7 +103,7 @@
 
 .NOTES
     Author:  Rouzax
-    Version: 2.9
+    Version: 2.10
     Requires: PowerShell 7.0+ and the SQLite assemblies from setup.ps1 (./lib)
     Encoding: Save as UTF-8 (no BOM) if you prefer that style.
 #>
@@ -184,6 +184,12 @@ $Script:DebugLog = [System.Collections.Generic.List[string]]::new()
 $Script:RenameList = [System.Collections.Generic.List[PSCustomObject]]::new()
 $Script:UndoStatements = [System.Collections.Generic.List[string]]::new()
 $Script:NameCollisions = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+# Collisions that WERE auto-resolved with an endpoint suffix. Kept separate from
+# $Script:NameCollisions on purpose: that list drives the skip filter, so a
+# resolved collision must never land in it or the device it resolved would be
+# dropped from the rename. This list is report-only.
+$Script:ResolvedCollisions = [System.Collections.Generic.List[PSCustomObject]]::new()
 
 # Statistics tracking
 $Script:Stats = @{
@@ -546,6 +552,51 @@ function Test-DeviceExcluded {
     return $false
 }
 
+function Get-CollisionBlame {
+    <#
+    .SYNOPSIS
+        Describes a device involved in a name collision, so the report can
+        explain WHY a rename was disambiguated or skipped.
+    .DESCRIPTION
+        When a Z-Wave value moves endpoint or disappears, Domoticz keeps the old
+        DeviceStatus row forever. That stale row never shows up in the node
+        source again, but it still owns its name, so the live device that wants
+        that name gets an endpoint suffix instead. Reporting whether the holder
+        is still present in the node source, and when it last updated, turns an
+        unexplained " - EP0" into an obvious "delete this stale device".
+
+        InSource is the signal that matters. Note it is not proof of death on its
+        own: zwave-js only materializes some values (notification, battery and
+        smoke sub-values) after the node first reports them, so a healthy but
+        quiet device can be absent from the source. LastUpdate and Used are
+        carried alongside so a human can make the call.
+    .OUTPUTS
+        PSCustomObject with DeviceID, Name, InSource, Used and LastUpdate.
+    #>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$DeviceID,
+
+        [Parameter(Mandatory)]
+        [hashtable]$AllDevices,
+
+        [Parameter(Mandatory)]
+        [System.Collections.Generic.HashSet[string]]$SourceIds
+    )
+
+    $device = $AllDevices[$DeviceID]
+
+    [PSCustomObject]@{
+        DeviceID   = $DeviceID
+        Name       = if ($device) { [string]$device.Name } else { '' }
+        InSource   = $SourceIds.Contains($DeviceID)
+        Used       = if ($device -and $device.ContainsKey('Used')) { [int]$device.Used } else { 0 }
+        LastUpdate = if ($device -and $device.ContainsKey('LastUpdate')) { [string]$device.LastUpdate } else { '' }
+    }
+}
+
 function Format-Duration {
     <#
     .SYNOPSIS
@@ -703,6 +754,9 @@ function New-HtmlReport {
         [System.Collections.Generic.List[PSCustomObject]]$Collisions,
 
         [Parameter()]
+        [System.Collections.Generic.List[PSCustomObject]]$ResolvedCollisions,
+
+        [Parameter()]
         [string]$BackupPath,
 
         [Parameter()]
@@ -803,15 +857,20 @@ function New-HtmlReport {
             # Build detail sections
             $details = ""
             if ($item.NameChanged) {
-                $oldSuffix = [System.Web.HttpUtility]::HtmlEncode((Get-NameSuffix $item.OldName))
-                $newSuffix = [System.Web.HttpUtility]::HtmlEncode((Get-NameSuffix $item.NewName))
+                # Show the FULL old and new name here. The collapsed header
+                # abbreviates to "<friendly> > <last segment>", which is
+                # unreadable when the two names have different shapes (a
+                # Domoticz auto-generated name vs. a rule-built one), so the
+                # expanded detail must always spell both out in full.
+                $oldFull = [System.Web.HttpUtility]::HtmlEncode($item.OldName)
+                $newFull = [System.Web.HttpUtility]::HtmlEncode($item.NewName)
                 $details += @"
                     <div class="change-detail">
                         <div class="change-label">Name</div>
                         <div class="change-values">
-                            <span class="old-value">$oldSuffix</span>
+                            <span class="old-value">$oldFull</span>
                             <span class="arrow">→</span>
-                            <span class="new-value">$newSuffix</span>
+                            <span class="new-value">$newFull</span>
                         </div>
                     </div>
 "@
@@ -850,7 +909,7 @@ function New-HtmlReport {
                 <div class="device-header" onclick="toggleDevice(this)">
                     <span class="expand-icon">▶</span>
                     <div class="device-name">
-                        <div class="friendly-name">$friendlyName <span class="name-suffix">› $newSuffix</span></div>
+                        <div class="friendly-name" title="$([System.Web.HttpUtility]::HtmlEncode($item.NewName))">$friendlyName <span class="name-suffix">› $newSuffix</span></div>
                         <div class="device-id">$deviceId</div>
                     </div>
                     <div class="changes">
@@ -868,24 +927,95 @@ $details
         $deviceItemsHtml = '<div class="no-data">No devices were updated</div>'
     }
 
+    # Renders one side of a collision: which device it is, whether the node
+    # source still knows about it, and how stale it looks. This is what turns an
+    # unexplained endpoint suffix into an actionable "delete that device".
+    function Get-BlameRowHtml {
+        param([string]$Role, [PSCustomObject]$Blame)
+
+        if ($null -eq $Blame) { return "" }
+
+        $enc = { param($t) [System.Web.HttpUtility]::HtmlEncode([string]$t) }
+        if ($Blame.InSource) {
+            $statusClass = "live"
+            $statusText = "in node source"
+        }
+        else {
+            $statusClass = "stale"
+            $details = @("not in node source", "Used=$($Blame.Used)")
+            if ($Blame.LastUpdate) { $details += "last update $($Blame.LastUpdate)" }
+            $statusText = $details -join " · "
+        }
+
+        return @"
+                <div class="blame-row">
+                    <span class="blame-role">$(& $enc $Role)</span>
+                    <code>$(& $enc $Blame.DeviceID)</code>
+                    <span class="blame-status $statusClass">$(& $enc $statusText)</span>
+                    <span class="blame-current">$(& $enc $Blame.Name)</span>
+                </div>
+"@
+    }
+
+    # Build auto-resolved collision section. These are NOT failures (every device
+    # still got renamed), but each one means a device was denied the clean name
+    # it asked for, which is invisible otherwise and reads as an inexplicable
+    # " - EP0" appearing in the rename list.
+    $resolvedSection = ""
+    if ($ResolvedCollisions -and $ResolvedCollisions.Count -gt 0) {
+        $resolvedItems = ""
+        foreach ($resolved in $ResolvedCollisions) {
+            $hint = ""
+            if ($resolved.Held -and -not $resolved.Held.InSource) {
+                $hint = @"
+                <div class="collision-hint">The device holding this name is no longer reported by the node source. If it is genuinely gone, delete it in Domoticz (Setup &rarr; Devices) and re-run to get the clean name.</div>
+"@
+            }
+            $resolvedItems += @"
+            <div class="collision-item resolved">
+                <div class="collision-name">$([System.Web.HttpUtility]::HtmlEncode($resolved.ContestedName))</div>
+                <div class="collision-resolution">$([System.Web.HttpUtility]::HtmlEncode($resolved.Resolution))</div>
+$(Get-BlameRowHtml -Role "wanted by" -Blame $resolved.Wanted)
+$(Get-BlameRowHtml -Role "held by" -Blame $resolved.Held)
+$hint
+            </div>
+"@
+        }
+
+        $resolvedSection = @"
+        <h2>🔀 Names Disambiguated <span class="count">($($ResolvedCollisions.Count) auto-resolved)</span></h2>
+        <p class="section-note">Two devices wanted the same name. Each device below was still renamed, but with an endpoint suffix appended so no duplicate name is created.</p>
+        <div class="collision-list">
+            $resolvedItems
+        </div>
+"@
+    }
+
     # Build collision section
     $collisionSection = ""
     if ($Collisions -and $Collisions.Count -gt 0) {
         $collisionItems = ""
         foreach ($collision in $Collisions) {
+            $hint = ""
+            if ($collision.Held -and -not $collision.Held.InSource) {
+                $hint = @"
+                <div class="collision-hint">The device holding this name is no longer reported by the node source. If it is genuinely gone, delete it in Domoticz (Setup &rarr; Devices) and re-run.</div>
+"@
+            }
             $collisionItems += @"
             <div class="collision-item">
                 <div class="collision-name">$([System.Web.HttpUtility]::HtmlEncode($collision.NewName))</div>
-                <div class="collision-ids">
-                    <code>$([System.Web.HttpUtility]::HtmlEncode($collision.DeviceID1))</code>
-                    <code>$([System.Web.HttpUtility]::HtmlEncode($collision.DeviceID2))</code>
-                </div>
+                <div class="collision-resolution">Both devices skipped, names left unchanged</div>
+$(Get-BlameRowHtml -Role "wanted by" -Blame $collision.Wanted)
+$(Get-BlameRowHtml -Role "held by" -Blame $collision.Held)
+$hint
             </div>
 "@
         }
 
         $collisionSection = @"
         <h2>⚠️ Name Collisions Detected <span class="count">($($Collisions.Count) collisions)</span></h2>
+        <p class="section-note">These could not be auto-resolved (same endpoint, no endpoint in the DeviceID, or the disambiguated name was itself taken), so both devices were skipped.</p>
         <div class="collision-list">
             $collisionItems
         </div>
@@ -1145,6 +1275,7 @@ $details
             color: var(--text-secondary);
             text-decoration: line-through;
             opacity: 0.7;
+            overflow-wrap: anywhere;
         }
         .arrow {
             color: var(--accent);
@@ -1153,6 +1284,7 @@ $details
         .new-value {
             color: var(--text-primary);
             font-weight: 500;
+            overflow-wrap: anywhere;
         }
         
         .expand-icon {
@@ -1230,20 +1362,73 @@ $details
             border-radius: 8px;
             padding: 1rem;
         }
+        .collision-item.resolved {
+            border-color: var(--warning);
+        }
         .collision-name {
             font-weight: 600;
             color: var(--error);
+            margin-bottom: 0.25rem;
+            overflow-wrap: anywhere;
+        }
+        .collision-item.resolved .collision-name {
+            color: var(--warning);
+        }
+        .collision-resolution {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
             margin-bottom: 0.5rem;
         }
-        .collision-ids {
-            display: flex;
-            flex-direction: column;
-            gap: 0.25rem;
+        .section-note {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin: -0.5rem 0 0.75rem 0;
         }
-        .collision-ids code {
+        .blame-row {
+            display: flex;
+            align-items: baseline;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            padding: 0.125rem 0;
+        }
+        .blame-role {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            min-width: 5.5rem;
+        }
+        .blame-row code {
             font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
             font-size: 0.75rem;
+            color: var(--text-secondary);
+            overflow-wrap: anywhere;
+        }
+        .blame-status {
+            font-size: 0.7rem;
+            border-radius: 4px;
+            padding: 0.1rem 0.4rem;
+            white-space: nowrap;
+        }
+        .blame-status.live {
+            background: rgba(78, 204, 163, 0.15);
+            color: var(--success);
+        }
+        .blame-status.stale {
+            background: rgba(255, 107, 107, 0.15);
+            color: var(--error);
+        }
+        .blame-current {
+            font-size: 0.75rem;
             color: var(--text-muted);
+            overflow-wrap: anywhere;
+        }
+        .collision-hint {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 0.5rem;
+            padding-top: 0.5rem;
+            border-top: 1px solid var(--border);
         }
         
         footer {
@@ -1330,6 +1515,8 @@ $details
 
         $collisionSection
 
+        $resolvedSection
+
         <h2>📝 Updated Devices <span class="count">($deviceCount devices)</span></h2>
         
         <div class="toolbar">
@@ -1349,7 +1536,7 @@ $deviceItemsHtml
         </div>
 
         <footer>
-            Generated by Rename-Domoticz-From-ZwaveJSON.ps1 v2.9
+            Generated by Rename-Domoticz-From-ZwaveJSON.ps1 v2.10
         </footer>
     </div>
 
@@ -1412,7 +1599,7 @@ $Script:Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 Write-Host ""
 Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║     Domoticz Device Renamer from Z-Wave JSON Export v2.9     ║" -ForegroundColor Cyan
+Write-Host "║     Domoticz Device Renamer from Z-Wave JSON Export v2.10    ║" -ForegroundColor Cyan
 Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
 
@@ -1612,13 +1799,18 @@ catch {
 $allDevices = @{}
 try {
     Write-Host "  Loading device data from database..." -ForegroundColor Gray
-    $rows = Invoke-SqliteReader -Connection $DbConn -Sql "SELECT DeviceID, Name, SwitchType, CustomImage, Type FROM DeviceStatus"
+    # Used and LastUpdate are not needed to rename anything; they are carried so
+    # a name collision can report whether the device holding the contested name
+    # is still alive (see Get-CollisionBlame).
+    $rows = Invoke-SqliteReader -Connection $DbConn -Sql "SELECT DeviceID, Name, SwitchType, CustomImage, Type, Used, LastUpdate FROM DeviceStatus"
     foreach ($r in $rows) {
         $allDevices[[string]$r.DeviceID] = @{
             Name        = [string]$r.Name
             SwitchType  = [int]$r.SwitchType
             CustomImage = [int]$r.CustomImage
             Type        = [int]$r.Type
+            Used        = [int]$r.Used
+            LastUpdate  = [string]$r.LastUpdate
         }
     }
     Write-Log "Loaded $($allDevices.Count) DeviceStatus rows into memory" -Level SUCCESS
@@ -1668,17 +1860,29 @@ Write-Host $BaseIdentifier -ForegroundColor Cyan
 
 Write-Host ""
 
-# Calculate total items for progress
+# Calculate total items for progress, and record every DeviceID the node source
+# knows about. The full set has to exist BEFORE Phase 1 starts: a collision can
+# name a device that Phase 1 has not reached yet, so building the set as we go
+# would report a live device as missing purely because of iteration order.
 $total = 0
+$sourceDeviceIds = [System.Collections.Generic.HashSet[string]]::new()
 foreach ($d in $ZwaveData) {
     # StrictMode-safe: some nodes (e.g. the controller) omit 'values' entirely
     # in a live zwave-js-ui state, unlike a JSON dump which includes an empty array.
     if ($d.PSObject.Properties['values'] -and $d.values) {
         $total += [int]$d.values.Count
+        foreach ($v in $d.values) {
+            if ($null -eq $v -or -not $v.PSObject.Properties['id']) { continue }
+            # Assign first: inside a method call the comma in `-replace "/", "-"`
+            # would be parsed as an argument separator, not as the replacement.
+            $vdid = ("${BaseIdentifier}_$([string]$v.id)" -replace " ", "_") -replace "/", "-"
+            [void]$sourceDeviceIds.Add($vdid)
+        }
         # +1 for the node-level device (e.g. a combined Temp+Humidity device
         # Domoticz creates and keys as {base}_node<id>) when one exists.
         if ($d.PSObject.Properties['id']) {
             $ndid = ("${BaseIdentifier}_node$([string]$d.id)" -replace " ", "_") -replace "/", "-"
+            [void]$sourceDeviceIds.Add($ndid)
             if ($allDevices.ContainsKey($ndid)) { $total++ }
         }
     }
@@ -1821,6 +2025,11 @@ foreach ($Device in $ZwaveData) {
                 $endpointsDiffer = ($null -ne $currentEndpoint -and $null -ne $existingEndpoint -and $currentEndpoint -ne $existingEndpoint)
                 $disambiguatedNorm = "$NewNameNorm - EP$currentEndpoint"
 
+                # Snapshot the contested name before the branches below reassign
+                # $NewNameNorm to the disambiguated form. Stripping the suffix
+                # back off afterwards would corrupt a real name ending in "EP<n>".
+                $contestedName = $NewNameNorm
+
                 if ($endpointsDiffer -and $existingIsPending) {
                     # Both sides are pending renames on different endpoints:
                     # disambiguate BOTH by appending their endpoint numbers.
@@ -1844,6 +2053,12 @@ foreach ($Device in $ZwaveData) {
                     $proposedNames[$NewNameNorm] = $DeviceID
                     [void]$pendingNames.Add($NewNameNorm)
 
+                    $Script:ResolvedCollisions.Add([PSCustomObject]@{
+                        ContestedName = $contestedName
+                        Resolution    = "Endpoint suffixes EP$existingEndpoint and EP$currentEndpoint appended"
+                        Wanted        = Get-CollisionBlame -DeviceID $DeviceID -AllDevices $allDevices -SourceIds $sourceDeviceIds
+                        Held          = Get-CollisionBlame -DeviceID $existingDeviceId -AllDevices $allDevices -SourceIds $sourceDeviceIds
+                    })
                     $Script:Stats.Collisions++
                     Write-Log "COLLISION RESOLVED: Disambiguated with EP$existingEndpoint and EP$currentEndpoint for $existingDeviceId and $DeviceID" -Level INFO
                 }
@@ -1856,6 +2071,12 @@ foreach ($Device in $ZwaveData) {
                     $proposedNames[$NewNameNorm] = $DeviceID
                     [void]$pendingNames.Add($NewNameNorm)
 
+                    $Script:ResolvedCollisions.Add([PSCustomObject]@{
+                        ContestedName = $contestedName
+                        Resolution    = "Endpoint suffix EP$currentEndpoint appended"
+                        Wanted        = Get-CollisionBlame -DeviceID $DeviceID -AllDevices $allDevices -SourceIds $sourceDeviceIds
+                        Held          = Get-CollisionBlame -DeviceID $existingDeviceId -AllDevices $allDevices -SourceIds $sourceDeviceIds
+                    })
                     $Script:Stats.Collisions++
                     Write-Log "COLLISION RESOLVED: Disambiguated $DeviceID with EP$currentEndpoint (conflicted with $existingDeviceId)" -Level INFO
                 }
@@ -1866,6 +2087,8 @@ foreach ($Device in $ZwaveData) {
                         NewName   = $NewNameNorm
                         DeviceID1 = $existingDeviceId
                         DeviceID2 = $DeviceID
+                        Held      = Get-CollisionBlame -DeviceID $existingDeviceId -AllDevices $allDevices -SourceIds $sourceDeviceIds
+                        Wanted    = Get-CollisionBlame -DeviceID $DeviceID -AllDevices $allDevices -SourceIds $sourceDeviceIds
                     })
                     $Script:Stats.Collisions++
                     Write-Log "COLLISION: '$NewNameNorm' would be assigned to both $existingDeviceId and $DeviceID" -Level WARNING
@@ -1927,9 +2150,25 @@ if ($Script:Stats.Missing -gt 0) {
 Write-Host ""
 
 # Report collisions
-$autoResolved = $Script:Stats.Collisions - $Script:NameCollisions.Count
+$autoResolved = $Script:ResolvedCollisions.Count
 if ($autoResolved -gt 0) {
     Write-Host "  ✓ $autoResolved name collision(s) auto-resolved with endpoint numbers" -ForegroundColor Green
+
+    # A resolved collision still means a device did NOT get the clean name it
+    # asked for. Call out the ones caused by a device that is no longer in the
+    # node source, because deleting that stale device is the actual fix.
+    $staleBlockers = @($Script:ResolvedCollisions | Where-Object { -not $_.Held.InSource })
+    if ($staleBlockers.Count -gt 0) {
+        Write-Host "     $($staleBlockers.Count) of those blocked by a device no longer in the node source:" -ForegroundColor Yellow
+        foreach ($blocked in $staleBlockers | Select-Object -First 5) {
+            Write-Host "       - '$($blocked.ContestedName)' → $($blocked.Resolution)" -ForegroundColor Yellow
+            Write-Host "         held by $($blocked.Held.DeviceID) (Used=$($blocked.Held.Used), last update $($blocked.Held.LastUpdate))" -ForegroundColor Gray
+        }
+        if ($staleBlockers.Count -gt 5) {
+            Write-Host "       ... and $($staleBlockers.Count - 5) more (see the HTML report)" -ForegroundColor Gray
+        }
+        Write-Host "       Delete those in Domoticz to free the name, then re-run." -ForegroundColor Gray
+    }
 }
 
 if ($Script:NameCollisions.Count -gt 0) {
@@ -2209,7 +2448,7 @@ $HtmlTempFallback = Join-Path $TempDir ("rename_report-{0}.html" -f $Timestamp)
 
 $finalHtmlPath = Write-SafeFile -PrimaryPath $HtmlPrimary -FallbackDbPath $HtmlDbFallback -FallbackTempPath $HtmlTempFallback -Description "HTML report" -Writer {
     param([string]$Path)
-    New-HtmlReport -OutputPath $Path -Stats $Script:Stats -RenameList $Script:RenameList -Collisions $Script:NameCollisions -BackupPath $BackupPath -WasDryRun $DryRun
+    New-HtmlReport -OutputPath $Path -Stats $Script:Stats -RenameList $Script:RenameList -Collisions $Script:NameCollisions -ResolvedCollisions $Script:ResolvedCollisions -BackupPath $BackupPath -WasDryRun $DryRun
 }
 
 $Script:Stopwatch.Stop()

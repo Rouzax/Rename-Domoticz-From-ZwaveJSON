@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.10] - 2026-08-20
+
+**The report now explains itself.** Two changes, both about making the rename list readable:
+
+- **Full names in the HTML report.** The Name change previously showed only the text after the last `" - "` on each side of the arrow, so a device going from `Living Room-Lamp (Living Room - Lamp - Electric Consumption [W])` to `Living Room - Lamp [W] - EP0` rendered as `Electric Consumption [W]) → EP0`, which reads as if the device is being renamed to `EP0`. Both names are now shown in full, long names wrap, and the collapsed header carries the full new name as a tooltip.
+- **Collisions say who is to blame.** Auto-resolved collisions were counted but never reported, so an endpoint suffix appeared in the rename list with nothing anywhere explaining it. The report gained a **Names Disambiguated** section naming, for each collision, the device that wanted the name and the device holding it, whether the node source still reports that device, and its `Used` flag and `LastUpdate`. A device that Domoticz kept after a Z-Wave value moved endpoint (or disappeared) still owns its name and blocks the live device; that is now called out on the console and in the report, with the fix (delete the stale device and re-run). Unresolvable collisions gained the same detail.
+
+Note that "not in node source" is a strong hint, not proof: zwave-js only creates notification, battery and smoke sub-values once a node first reports them, so a healthy but quiet device can be absent. `Used` and `LastUpdate` are shown alongside so the call stays yours.
+
+Internally, `DeviceStatus` is now read with `Used` and `LastUpdate` in addition to the existing columns. Both are standard Domoticz columns and are used only for reporting; nothing about which devices get renamed has changed.
+
 ## [2.9] - 2026-07-09
 
 **Node-level device renaming**: the tool now also renames the node-level device Domoticz creates for a node (for example the combined Temp+Humidity device it builds from a multisensor, Domoticz Type 82/84), which has no Z-Wave value behind it and was previously never matched. These become `{location} - {name} - Climate` for Temp+Humidity (and Temp+Humidity+Baro) devices, and `{location} - {name}` for any other node-level device. It runs through the normal dry-run, rules, and collision detection, and can be excluded with `-ExcludePattern 'node\d+$'`.
