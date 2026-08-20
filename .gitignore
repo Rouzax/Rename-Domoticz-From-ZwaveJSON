@@ -29,3 +29,6 @@ lib/
 
 # Built docs site (zensical build)
 site/
+
+# Git worktrees for isolated feature work
+.worktrees/
