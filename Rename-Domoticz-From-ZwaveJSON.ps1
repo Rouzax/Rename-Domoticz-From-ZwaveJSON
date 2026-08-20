@@ -1,11 +1,17 @@
 <#
 .SYNOPSIS
-    Renames Domoticz devices based on Z-Wave JSON data—skipping unchanged names.
+    Renames Domoticz devices from Z-Wave JS node data, skipping unchanged names.
 
 .DESCRIPTION
-    Reads a JSON file containing Z-Wave device information, constructs a new name
-    for each device (Location - DeviceName - Label), and updates the name in a
-    Domoticz SQLite database. Can also update SwitchType and CustomImage based on rules.
+    Reads Z-Wave node data, constructs a new name for each device
+    (Location - DeviceName - Label), and updates the name in a Domoticz SQLite
+    database. Can also update SwitchType and CustomImage based on rules.
+
+    Node data comes from one of two sources. Reading live from a running
+    zwave-js-ui instance with -ZwaveJsUrl is the preferred route: it needs no
+    manual export and is always current. -JsonFile reads a nodes_dump.json
+    export instead, for when the instance is not reachable or you want a
+    frozen snapshot.
 
     Features:
       - Bulk-loads Domoticz DeviceStatus once for speed.
@@ -17,7 +23,7 @@
       - Skips updates when the existing name already matches the new name.
       - Records only true renames in a CSV summary.
       - Logs detailed progress, shows progress bar with ETA, and prints a final summary.
-      - Supports WhatIf/DryRun mode for previewing changes without modifying the database.
+      - Supports -DryRun for previewing changes without modifying the database.
       - Detects name collisions before applying changes.
       - Generates undo SQL scripts for easy rollback.
       - Optionally generates HTML reports for easier review.
@@ -25,13 +31,16 @@
       - If LogFile/CsvFile are not provided (or writing fails), falls back to the
         DB folder, and then to the system TEMP folder.
 
-.PARAMETER JsonFile
-    Path to the JSON file containing Z-Wave data. Mandatory: one of -JsonFile or -ZwaveJsUrl.
-
 .PARAMETER ZwaveJsUrl
     Base URL of a running zwave-js-ui instance (e.g. https://host:8091).
-    Alternative to -JsonFile; reads node data live over zwave-js-ui's socket.io
-    API. Mandatory: one of -JsonFile or -ZwaveJsUrl.
+    The preferred way to supply node data: read live over zwave-js-ui's
+    socket.io API, no manual export needed. Read-only.
+    Mandatory: one of -ZwaveJsUrl or -JsonFile.
+
+.PARAMETER JsonFile
+    Path to a nodes_dump.json export from Z-Wave JS UI. Use this when the
+    instance is not reachable from here, or when you want a frozen snapshot.
+    Mandatory: one of -ZwaveJsUrl or -JsonFile.
 
 .PARAMETER ZwaveJsToken
     Optional auth token for a zwave-js-ui with authentication enabled. Over http
@@ -69,7 +78,8 @@
     Regex pattern to exclude DeviceIDs matching this pattern.
 
 .PARAMETER DryRun
-    Preview changes without modifying the database. Alias: -WhatIf
+    Preview changes without modifying the database. No changes are written and
+    no backup is taken.
 
 .PARAMETER Force
     Skip confirmation prompt before making changes.
@@ -78,15 +88,24 @@
     Skip database backup (use with caution).
 
 .EXAMPLE
-    .\Rename-Domoticz-From-ZwaveJSON.ps1 `
-        -JsonFile "D:\nodes_dump.json" `
-        -DbPath   "D:\domoticz.db"
+    .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "http://zwave-host:8091" -DbPath "domoticz.db" -DryRun
+
+    Preferred route: preview the changes, reading node data live from a running
+    zwave-js-ui instance. Always run a preview first.
+
+.EXAMPLE
+    .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "http://zwave-host:8091" -DbPath "domoticz.db"
+
+    Apply the changes. Stop Domoticz first: it caches device rows in memory and
+    can overwrite renames on shutdown.
 
 .EXAMPLE
     .\Rename-Domoticz-From-ZwaveJSON.ps1 `
         -JsonFile "D:\nodes_dump.json" `
         -DbPath   "D:\domoticz.db" `
         -DryRun
+
+    Same preview, from a nodes_dump.json export instead of a live instance.
 
 .EXAMPLE
     .\Rename-Domoticz-From-ZwaveJSON.ps1 `
@@ -95,11 +114,6 @@
         -RulesFile "D:\custom_rules.json" `
         -HtmlReport "D:\report.html" `
         -ExcludePattern "test_.*"
-
-.EXAMPLE
-    .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "https://host:8091" -DbPath "domoticz.db" -DryRun
-
-    Reads node data live from zwave-js-ui instead of a JSON export (read-only).
 
 .NOTES
     Author:  Rouzax

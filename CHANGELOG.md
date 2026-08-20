@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+**Documentation site**: the reference and task content moved out of the README into a Zensical site published at <https://rouzax.github.io/Rename-Domoticz-From-ZwaveJSON/>, and `readme.md` dropped from 616 lines to 78. Reading live from zwave-js-ui with `-ZwaveJsUrl` is now the documented primary route, with the JSON export presented as the alternative. Writing the pages against the script rather than the README surfaced several long-standing errors, now corrected: CustomImage value 9 was labelled "Fire" but is "Computer"; the SwitchType and CustomImage tables held only 7 of 21 and 3 of 7 rows; undo SQL is not written on dry runs or no-change runs while CSV is; an unresolvable collision drops every pending change for that device, not just the name; and `rename_rules.json` is loaded from the script's own directory, not the working directory.
+
+**Runtime-only `dist` branch**: publishing a release now syncs a `dist` branch containing just the files needed to run the tool, so `git clone -b dist` and `git pull` skip the docs, tests and CI config.
+
+**Comment-based help**: removed a documented `-WhatIf` alias for `-DryRun` that never existed (no `[Alias]` attribute, no `SupportsShouldProcess`), and reordered the help so the preferred `-ZwaveJsUrl` route leads. Help text only; parameters and behaviour are unchanged, and `-JsonFile` remains the default parameter set so positional invocation still binds to it.
+
 **Ko-fi support links**: added a Support section to the README and a `.github/FUNDING.yml` so GitHub can show a Sponsor button. Documentation only; running the script is unchanged, and it never prompts for anything.
 
 ## [2.10] - 2026-08-20
