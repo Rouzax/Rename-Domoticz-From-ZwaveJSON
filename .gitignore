@@ -16,7 +16,7 @@ rename_report*.html
 # Claude Code
 CLAUDE.md
 .claude/
-docs/superpowers/
+.superpowers/
 
 # Z-Wave JSON exports
 nodes_dump.json
@@ -26,3 +26,6 @@ _temp/
 
 # Vendored SQLite assemblies (fetched by setup.ps1, not committed)
 lib/
+
+# Built docs site (zensical build)
+site/
