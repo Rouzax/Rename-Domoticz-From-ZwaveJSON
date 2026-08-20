@@ -16,6 +16,51 @@ You do **not** need a system-wide SQLite install, and you do not need the
 older PSSQLite PowerShell module. `setup.ps1` provisions everything the
 script needs.
 
+## Get the tool
+
+There are two ways to get the files onto the machine that will run the script.
+Both leave you in a directory you run the script from.
+
+=== "Runtime only (recommended)"
+
+    The `dist` branch carries only what is needed to run the tool: the script,
+    `setup.ps1`, `rename_rules.json`, the `modules/` folder, this readme and the
+    licence. No documentation source, no tests, no CI configuration.
+
+    ```powershell
+    git clone -b dist https://github.com/Rouzax/Rename-Domoticz-From-ZwaveJSON.git
+    cd Rename-Domoticz-From-ZwaveJSON
+    ```
+
+    To move to a newer release later, pull on that branch:
+
+    ```powershell
+    git pull
+    ```
+
+    The branch is re-synced every time a release is published, and its history is
+    linear, so `git pull` is always a fast-forward. It never contains work in
+    progress: it only ever moves from one released state to the next.
+
+=== "Full clone"
+
+    Tracks `main`, and includes the documentation source, the Pester test suite
+    and the workflow files alongside the runtime files.
+
+    ```powershell
+    git clone https://github.com/Rouzax/Rename-Domoticz-From-ZwaveJSON.git
+    cd Rename-Domoticz-From-ZwaveJSON
+    ```
+
+    Choose this if you want to run the tests, change the code, or read the
+    documentation offline. `main` moves between releases, so it can contain
+    changes that are not in any release yet.
+
+If you would rather not use git at all, GitHub can hand you either branch as a
+zip from the **Code** button on the repository page. Pick the `dist` branch
+first if you go that route. Updating then means downloading a fresh zip rather
+than pulling.
+
 ## One-time setup
 
 Run the setup script once on each machine you plan to use the tool from:
@@ -25,8 +70,10 @@ pwsh ./setup.ps1
 ```
 
 This is a **per-machine** step, not a per-clone or per-run step: run it again
-after pulling a fresh copy of the repository onto a machine that has never
-run it, but you do not need to re-run it every time you use the script.
+after putting a fresh copy of the files onto a machine that has never run it,
+but you do not need to re-run it every time you use the script. A `git pull`
+on the `dist` branch does not require re-running it, because `lib/` is left
+alone by the update.
 Re-run it (or `setup.ps1 -Force` to redownload even if `lib/` already looks
 complete) only after the pinned package versions change.
 
