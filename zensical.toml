@@ -12,6 +12,11 @@ extra_css = ["stylesheets/extra.css"]
 
 nav = [
   { "Home" = "index.md" },
+  { "Getting started" = [
+    { "Installation" = "getting-started/installation.md" },
+    { "Your first run" = "getting-started/first-run.md" },
+    { "Input modes" = "getting-started/input-modes.md" },
+  ]},
 ]
 
 [project.theme]
