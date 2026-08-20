@@ -2,10 +2,11 @@
 
 This tool bulk-renames Domoticz devices created by Z-Wave JS MQTT Auto-Discovery, turning a generic identifier like `zwavejs2mqtt_0xc15d8aa6_42-49-0-Air_temperature` into a friendly name like `Living Room - Motion Sensor - Motion`.
 
-<!-- Card grid disabled until Task 5: it links to getting-started/installation.md,
-     getting-started/first-run.md, rules/naming.md, and troubleshooting.md,
-     none of which exist yet (Tasks 2-5 create them). --strict fails the build
-     otherwise. Restore this block once all four pages exist.
+<!-- DEFERRED-LINK: card grid disabled until Task 5: it links to
+     getting-started/installation.md, getting-started/first-run.md,
+     rules/naming.md, and troubleshooting.md, none of which exist yet
+     (Tasks 2-5 create them). --strict fails the build otherwise. Restore
+     this block once all four pages exist.
 
 <div class="grid cards" markdown>
 

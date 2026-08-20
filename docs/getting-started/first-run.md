@@ -47,9 +47,15 @@ anything else. Look for:
 - Any collisions the script reports as unresolved (it will list these
   explicitly rather than silently skip them).
 
+<!-- DEFERRED-LINK: restore the link to ../rules/naming.md once Task 4
+     creates it. --strict fails the build on links to pages that do not
+     exist yet.
 If something looks wrong, adjust your Z-Wave JS UI room/device names, or add
-a custom renaming rule, then run the `-DryRun` command again until the report
-looks right.
+a custom [renaming rule](../rules/naming.md), then run the `-DryRun` command
+again until the report looks right. -->
+If something looks wrong, adjust your Z-Wave JS UI room/device names, or add
+a custom renaming rule, then run the `-DryRun` command again until the
+report looks right.
 
 ## 3. Apply the changes
 
@@ -68,9 +74,9 @@ anything, so you get one more chance to back out.
 Start Domoticz again so it picks up the renamed devices. New names will not
 appear in the UI until it restarts.
 
-<!-- Link disabled until Task 3 creates using/output.md; --strict fails the
-     build on a link to a page that does not exist yet. Restore as a plain
-     link once that page lands.
+<!-- DEFERRED-LINK: restore the link to ../using/output.md once Task 3
+     creates it. --strict fails the build on links to pages that do not
+     exist yet.
 For a full breakdown of every file the script writes and what each one
 contains, see Understanding the output (`../using/output.md`). -->
 For a full breakdown of every file the script writes and what each one
