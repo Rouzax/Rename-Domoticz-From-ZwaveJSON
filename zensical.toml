@@ -1,0 +1,129 @@
+[project]
+site_url = "https://rouzax.github.io/Rename-Domoticz-From-ZwaveJSON/"
+site_name = "Domoticz Device Renamer for Z-Wave JS"
+site_description = "Bulk-rename Domoticz devices from Z-Wave JS UI room and device names."
+copyright = "Copyright &copy; 2026 Rouzax"
+
+repo_url = "https://github.com/Rouzax/Rename-Domoticz-From-ZwaveJSON"
+repo_name = "Rouzax/Rename-Domoticz-From-ZwaveJSON"
+edit_uri = "edit/main/docs/"
+
+extra_css = ["stylesheets/extra.css"]
+
+nav = [
+  { "Home" = "index.md" },
+  { "Getting started" = [
+    { "Installation" = "getting-started/installation.md" },
+    { "Your first run" = "getting-started/first-run.md" },
+    { "Input modes" = "getting-started/input-modes.md" },
+  ]},
+  { "Using the tool" = [
+    { "Running the tool" = "using/running.md" },
+    { "Understanding the output" = "using/output.md" },
+    { "Name collisions" = "using/collisions.md" },
+    { "Reverting changes" = "using/reverting.md" },
+  ]},
+  { "Renaming rules" = [
+    { "How naming works" = "rules/naming.md" },
+    { "Writing your own rules" = "rules/writing-rules.md" },
+    { "Lookup tables" = "rules/lookup-tables.md" },
+  ]},
+  { "Reference" = [
+    { "Parameters" = "reference/parameters.md" },
+    { "Exit codes" = "reference/exit-codes.md" },
+    { "File structure" = "reference/file-structure.md" },
+  ]},
+  { "Troubleshooting" = "troubleshooting.md" },
+]
+
+[project.theme]
+language = "en"
+# variant omitted on purpose: `modern` is the default and where the design work goes.
+features = [
+  "announce.dismiss",
+  "content.action.edit",
+  "content.code.annotate",
+  "content.code.copy",
+  "content.code.select",
+  "content.footnote.tooltips",
+  "content.tabs.link",
+  "content.tooltips",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.instant.prefetch",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.tabs",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+  "toc.follow",
+]
+
+[project.theme.icon]
+repo = "fontawesome/brands/github"
+# No logo asset exists yet. A theme icon stands in; a real mark can replace
+# this later without touching anything else.
+logo = "lucide/tag"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/github"
+link = "https://github.com/Rouzax/Rename-Domoticz-From-ZwaveJSON"
+name = "Rename-Domoticz-From-ZwaveJSON on GitHub"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/ko-fi"
+link = "https://ko-fi.com/O0W221GBUG"
+name = "Support this project on Ko-fi"
+
+[project.markdown_extensions]
+abbr = {}
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+toc.permalink = true
+pymdownx.arithmatex.generic = true
+pymdownx.betterem = {}
+pymdownx.caret = {}
+pymdownx.details = {}
+pymdownx.emoji.emoji_generator = "zensical.extensions.emoji.to_svg"
+pymdownx.emoji.emoji_index = "zensical.extensions.emoji.twemoji"
+pymdownx.highlight.anchor_linenums = true
+pymdownx.highlight.line_spans = "__span"
+pymdownx.highlight.pygments_lang_class = true
+pymdownx.inlinehilite = {}
+pymdownx.keys = {}
+pymdownx.magiclink = {}
+pymdownx.mark = {}
+pymdownx.smartsymbols = {}
+pymdownx.superfences.custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
+pymdownx.tabbed.alternate_style = true
+pymdownx.tabbed.combine_header_slug = true
+pymdownx.tasklist.custom_checkbox = true
+pymdownx.tilde = {}

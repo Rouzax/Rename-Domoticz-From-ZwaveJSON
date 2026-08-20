@@ -1,0 +1,52 @@
+name: Sync dist branch
+
+# Maintains a runtime-only `dist` branch with linear history, so a git clone or
+# pull that tracks `dist` gets the tool without docs, tests or CI config.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  sync-dist:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push to the dist branch
+    steps:
+      - name: Checkout tag (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Sync runtime files to dist branch
+        env:
+          TAG: ${{ github.event.release.tag_name }} # via env, never expanded into the shell script
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9A-Za-z.+-]+$ ]] || { echo "unexpected tag: $TAG" >&2; exit 1; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # INVARIANT: this list is the runtime surface of the tool. Anything a
+          # user needs to run it goes here; anything else (tests, docs, CI,
+          # zensical.toml, requirements-docs.txt, CHANGELOG.md) must not.
+          snapshot="$(mktemp -d)"
+          cp Rename-Domoticz-From-ZwaveJSON.ps1 setup.ps1 rename_rules.json readme.md LICENSE "$snapshot/"
+          cp -r modules "$snapshot/"
+          if git ls-remote --exit-code --heads origin dist >/dev/null 2>&1; then
+            git fetch origin dist
+            git checkout dist
+          else
+            git checkout --orphan dist
+          fi
+          git rm -rfq . >/dev/null 2>&1 || true
+          cp -r "$snapshot"/. .
+          git add -- Rename-Domoticz-From-ZwaveJSON.ps1 setup.ps1 rename_rules.json readme.md LICENSE modules
+          if git diff --cached --quiet; then
+            echo "dist already up to date for $TAG"
+            exit 0
+          fi
+          git commit -m "dist: $TAG"
+          git push origin dist

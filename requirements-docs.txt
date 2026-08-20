@@ -1,0 +1,3 @@
+# Docs site toolchain. Pinned per the repo's supply-chain rules.
+# Zensical is pre-1.0 and ships every week or two; bump deliberately.
+zensical==0.0.56
