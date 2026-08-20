@@ -13,12 +13,16 @@ Z-Wave device types (smoke detectors, motion sensors, door contacts,
 battery alerts, and more), including `switchType` and `customImage`
 settings for the devices that need them.
 
-When you run the script from the repository directory and do not pass
-`-RulesFile`, this file is loaded automatically. If you downloaded only
-the `.ps1` file, `rename_rules.json` is not there to find, and the script
-falls back to a small built-in set that only shortens a handful of common
-labels; see [Built-in label shortening](naming.md#built-in-label-shortening)
-for what that fallback set covers.
+When `rename_rules.json` sits next to the script itself and you do not pass
+`-RulesFile`, it is loaded automatically. This is the script's own
+directory, not your shell's current working directory: if you keep
+`rename_rules.json` somewhere else and run the script from a different
+folder, it will not be found, even though the current directory looks like
+the natural place to look. If you downloaded only the `.ps1` file, there is
+nothing next to it to find, and the script falls back to a small built-in
+set that only shortens a handful of common labels; see
+[Built-in label shortening](naming.md#built-in-label-shortening) for what
+that fallback set covers.
 
 To customize, copy `rename_rules.json`, edit it, and either keep the copy
 next to the script (auto-loaded) or point to it explicitly:

@@ -28,6 +28,12 @@ nav = [
     { "Writing your own rules" = "rules/writing-rules.md" },
     { "Lookup tables" = "rules/lookup-tables.md" },
   ]},
+  { "Reference" = [
+    { "Parameters" = "reference/parameters.md" },
+    { "Exit codes" = "reference/exit-codes.md" },
+    { "File structure" = "reference/file-structure.md" },
+  ]},
+  { "Troubleshooting" = "troubleshooting.md" },
 ]
 
 [project.theme]

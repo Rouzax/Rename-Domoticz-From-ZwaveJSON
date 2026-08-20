@@ -111,14 +111,7 @@ non-interactive run waiting for input that never comes.
 exit $LASTEXITCODE
 ```
 
-<!-- DEFERRED-LINK: restore the link to ../reference/exit-codes.md once
-     Task 4 creates it. --strict fails the build on links to pages that do
-     not exist yet.
 The script always exits with a code you can check: 0 for success, 1 for an
 error, 2 when nothing needed to change, 3 for partial success, and 4 if a
 user cancelled an interactive prompt. See [Exit codes](../reference/exit-codes.md)
-for the full list and what to do about each one. -->
-The script always exits with a code you can check: 0 for success, 1 for an
-error, 2 when nothing needed to change, 3 for partial success, and 4 if a
-user cancelled an interactive prompt. The full list, and what to do about
-each one, is covered in the reference section of these docs.
+for the full list and what to do about each one.
