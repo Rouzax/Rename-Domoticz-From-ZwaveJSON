@@ -85,8 +85,16 @@ The script renames these too, using a shorter form of the same scheme:
 
 This runs through the same dry-run, rules, and collision detection as
 every other device. If you would rather leave node-level devices
-untouched, exclude them by pattern; see
-[Excluding devices from a run](../using/running.md#excluding-devices).
+untouched, exclude them by pattern, since their DeviceID always ends in
+`node<id>`:
+
+```powershell
+.\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db" `
+    -ExcludePattern 'node\d+$'
+```
+
+See [Excluding devices from a run](../using/running.md#excluding-devices)
+for the other ways to exclude devices.
 
 ## The `$` prefix is preserved
 

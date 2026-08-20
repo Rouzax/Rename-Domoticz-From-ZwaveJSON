@@ -18,17 +18,24 @@ Automatically rename your Domoticz devices based on the room and device names co
    pwsh ./setup.ps1
    ```
 
-2. **Preview the changes** without touching the database:
+2. **Preview the changes** without touching the database, reading node data
+   live from your running zwave-js-ui instance:
 
    ```powershell
-   .\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db" -DryRun
+   .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "http://zwave-host:8091" -DbPath "domoticz.db" -DryRun
    ```
 
 3. **Review the HTML report**, then apply the changes for real:
 
    ```powershell
-   .\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db"
+   .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "http://zwave-host:8091" -DbPath "domoticz.db"
    ```
+
+**Alternative: skip the full clone.** Every release also syncs a
+runtime-only `dist` branch containing just the files needed to run the
+tool (script, `setup.ps1`, `rename_rules.json`, `modules/`, this readme,
+no docs, tests, or CI config). `git clone -b dist` it once, then `git pull`
+on that branch to pick up future releases.
 
 ---
 
