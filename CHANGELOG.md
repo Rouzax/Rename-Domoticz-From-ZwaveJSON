@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+**Ko-fi support links**: added a Support section to the README and a `.github/FUNDING.yml` so GitHub can show a Sponsor button. Documentation only; running the script is unchanged, and it never prompts for anything.
+
 ## [2.10] - 2026-08-20
 
 **The report now explains itself.** Two changes, both about making the rename list readable:

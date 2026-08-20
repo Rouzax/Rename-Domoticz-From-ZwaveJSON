@@ -606,3 +606,11 @@ for release notes.
 ---
 
 ⚠️ **DISCLAIMER:** This script modifies your database. Use it at your own risk! Always keep a backup of your Domoticz database before running. 🚀
+
+---
+
+## ❤️ Support
+
+Building tools that solve my own problems and sharing them in the hope they solve yours too. Renaming a few hundred Z-Wave devices by hand in the Domoticz UI is an afternoon you do not get back.
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/O0W221GBUG)
