@@ -97,6 +97,30 @@ If the check finds the database in use, the script prompts you to continue
 or cancel, unless you passed `-Force` or `-DryRun`, in which case it
 proceeds (or previews) without asking.
 
+## Devices the tool refuses to touch
+
+A DeviceID is not unique in Domoticz. A multi-unit device, most commonly a
+Central Scene remote, is stored as one DeviceID with several `Unit` rows, and
+every write this tool makes matches on DeviceID alone.
+
+When those rows agree on their name, the tool renames them together as normal
+and you will never notice. When they **disagree**, because you named the units
+individually in Domoticz, the tool skips the device entirely and says so:
+
+```text
+  !  1 device(s) skipped: several Domoticz rows share the DeviceID and disagree
+     Renaming would collapse them into one name, and the undo script could not restore them.
+```
+
+It cannot do better. One Z-Wave value yields one label, so there is no
+information available to give three units three names, and renaming would
+overwrite all of them with the same one. Because the undo statement also matches
+on DeviceID alone, the undo script could not put the originals back either.
+
+These appear in the summary as `Ambiguous`, which is shown only when the count
+is above zero, and in the HTML report under **Skipped: ambiguous devices**. If
+you want them renamed, rename them in Domoticz.
+
 ## Automation
 
 For unattended use, pass `-Force` to skip every interactive prompt the

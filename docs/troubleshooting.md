@@ -16,6 +16,7 @@ more detail than the console summary.
 | **"Name collision detected"** | Collisions across different endpoints are auto-resolved with an endpoint suffix; unresolvable collisions (same endpoint, an endpoint that cannot be read from the DeviceID, or the disambiguated name is itself already taken) are reported and skipped rather than written. See [Name collisions](using/collisions.md). |
 | **A device was renamed with an unexpected ` - EP0` suffix** | Another device already holds the clean name. Check **Names Disambiguated** in the HTML report: if the holder is marked "not in node source", it is a leftover Domoticz device, so delete it (Setup, Devices) and re-run. |
 | **Logs, CSV, HTML report, or undo script not where expected** | Check the console output for the actual paths used; each file falls back in order: the path you gave it, then the database folder, then the system temp folder. See [Where files land](using/output.md#where-files-land). |
+| **A device is never renamed, and the summary shows `Ambiguous`** | Several Domoticz rows share that DeviceID and disagree, which happens when the units of a multi-unit device (a Central Scene remote, say) were named individually. One Z-Wave value cannot supply several names, so the tool leaves them alone rather than collapsing them. Rename them in Domoticz if you want them changed. |
 
 ## Still stuck
 

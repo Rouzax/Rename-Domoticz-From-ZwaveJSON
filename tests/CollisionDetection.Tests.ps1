@@ -50,6 +50,11 @@ BeforeAll {
     #             endpoint; that stale device is absent from this export but
     #             still owns the clean name, so the live endpoint-0 device can
     #             only be renamed with an endpoint suffix.
+    #   node 9  - a Central Scene remote. Domoticz keys its three key states as
+    #             ONE DeviceID with three Unit rows, and the user has named each
+    #             one differently. A single Z-Wave value cannot supply three
+    #             names, and every write matches on DeviceID alone, so renaming
+    #             would collapse all three and the undo could not restore them.
     $script:NodesJson = @'
 [
   {
@@ -78,6 +83,12 @@ BeforeAll {
     "values": [
       { "id": "8-50-0-value-66049", "label": "Electric Consumption [W]" }
     ]
+  },
+  {
+    "id": 9, "loc": "Zone Echo", "name": "Remote", "productLabel": "TESTREM",
+    "values": [
+      { "id": "9-91-0-scene-001", "label": "Scene 001" }
+    ]
   }
 ]
 '@
@@ -90,6 +101,7 @@ BeforeAll {
     { "name": "CC48 Motion",    "pattern": "48-\\d+-Motion$",                                "replace": " - Sensor state \\(Motion\\)$", "with": " - Motion",      "description": "forces a collision with the unchanged CC113 device" },
     { "name": "Switch EP",      "pattern": "37-\\d+-currentValue$",                          "replace": " - Current value$",             "with": "",               "description": "both endpoints reduce to the same base name" },
     { "name": "CC48 Any",       "pattern": "48-\\d+-Any$",                                   "replace": " - Sensor state \\(Any\\)$",    "with": " - Motion (Binary)", "description": "unique rename, no collision" },
+    { "name": "Scene",          "pattern": "91-\\d+-scene-\\d+$",                          "replace": " - Scene 001$",                 "with": " - Scene 1",     "description": "would collapse three differently named Domoticz rows into one" },
     { "name": "Electric Watts", "pattern": "50-\\d+-value-66049$",                           "replace": " - Electric Consumption \\[W\\]$", "with": " [W]",         "description": "collides with a stale device Domoticz kept from another endpoint" }
   ]
 }
@@ -106,7 +118,16 @@ BeforeAll {
         'test_node5'                                      = 'Zone Alpha-PIR'                             # node-level combined Temp+Hum device
         'test_8-50-0-value-66049'                         = 'Zone Delta-Lamp (Zone Delta - Lamp - Electric Consumption [W])'  # live, badly named
         'test_8-50-1-value-66049'                         = 'Zone Delta - Lamp [W]'                      # stale, holds the clean name
+        'test_9-91-0-scene-001'                           = 'Zone Echo - Remote - Scene 1 Pressed'       # one of three disagreeing rows
     }
+
+    # Additional DeviceStatus rows that share a DeviceID with an entry above but
+    # carry a different name, as Domoticz does for a multi-unit device whose
+    # units the user renamed individually.
+    $script:ExtraRows = @(
+        @{ DeviceID = 'test_9-91-0-scene-001'; Name = 'Zone Echo - Remote - Scene 1 Held';     Unit = 1 }
+        @{ DeviceID = 'test_9-91-0-scene-001'; Name = 'Zone Echo - Remote - Scene 1 Released'; Unit = 2 }
+    )
 
     # Domoticz device Type per DeviceID (82 = Temp+Humidity). Others default to 0.
     $script:DeviceTypes = @{ 'test_node5' = 82 }
@@ -126,11 +147,16 @@ BeforeAll {
             # Used and LastUpdate mirror the real Domoticz DeviceStatus schema.
             # The renamer reads them to describe a device that is holding a
             # contested name; without them the fixture no longer matches reality.
-            [void](Invoke-SqliteNonQuery -Connection $conn -Sql 'CREATE TABLE DeviceStatus (DeviceID TEXT, Name TEXT, SwitchType INTEGER, CustomImage INTEGER, Type INTEGER, Used INTEGER, LastUpdate TEXT)')
+            # Unit mirrors the real Domoticz schema: DeviceID is NOT unique, and
+            # a multi-unit device is several rows sharing one DeviceID.
+            [void](Invoke-SqliteNonQuery -Connection $conn -Sql 'CREATE TABLE DeviceStatus (DeviceID TEXT, Name TEXT, SwitchType INTEGER, CustomImage INTEGER, Type INTEGER, Used INTEGER, LastUpdate TEXT, Unit INTEGER)')
             foreach ($id in $script:OriginalNames.Keys) {
                 $type = if ($script:DeviceTypes.ContainsKey($id)) { $script:DeviceTypes[$id] } else { 0 }
                 $meta = if ($script:DeviceMeta.ContainsKey($id)) { $script:DeviceMeta[$id] } else { @{ Used = 1; LastUpdate = '2026-01-01 00:00:00' } }
-                [void](Invoke-SqliteNonQuery -Connection $conn -Sql 'INSERT INTO DeviceStatus (DeviceID, Name, SwitchType, CustomImage, Type, Used, LastUpdate) VALUES (@id, @name, 8, 0, @type, @used, @lastUpdate)' -Parameters @{ id = $id; name = $script:OriginalNames[$id]; type = $type; used = $meta.Used; lastUpdate = $meta.LastUpdate })
+                [void](Invoke-SqliteNonQuery -Connection $conn -Sql 'INSERT INTO DeviceStatus (DeviceID, Name, SwitchType, CustomImage, Type, Used, LastUpdate, Unit) VALUES (@id, @name, 8, 0, @type, @used, @lastUpdate, 0)' -Parameters @{ id = $id; name = $script:OriginalNames[$id]; type = $type; used = $meta.Used; lastUpdate = $meta.LastUpdate })
+            }
+            foreach ($extra in $script:ExtraRows) {
+                [void](Invoke-SqliteNonQuery -Connection $conn -Sql 'INSERT INTO DeviceStatus (DeviceID, Name, SwitchType, CustomImage, Type, Used, LastUpdate, Unit) VALUES (@id, @name, 8, 0, 0, 1, ''2026-01-01 00:00:00'', @unit)' -Parameters @{ id = $extra.DeviceID; name = $extra.Name; unit = $extra.Unit })
             }
         }
         finally { $conn.Close() }
@@ -154,7 +180,8 @@ Describe 'Collision detection against the end state' -Skip:(-not $EngineAvailabl
         $script:WorkDir = Join-Path ([System.IO.Path]::GetTempPath()) ("renamer-test-" + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $script:WorkDir -Force | Out-Null
 
-        $db    = Join-Path $script:WorkDir 'db.db'
+        $script:DbPath = Join-Path $script:WorkDir 'db.db'
+        $db    = $script:DbPath
         $json  = Join-Path $script:WorkDir 'nodes.json'
         $rules = Join-Path $script:WorkDir 'rules.json'
 
@@ -236,6 +263,45 @@ Describe 'Collision detection against the end state' -Skip:(-not $EngineAvailabl
         # two were merged, these devices would silently keep their old names.
         $script:Names['test_6-37-1-currentValue'] | Should -Not -Match 'Current value'
         $script:Names['test_8-50-0-value-66049'] | Should -Not -Match '^Zone Delta-Lamp'
+    }
+
+    It 'does not collapse a DeviceID whose Domoticz rows disagree' {
+        # One Z-Wave value cannot supply three names, and both the UPDATE and the
+        # undo statement match on DeviceID alone. Renaming here would overwrite
+        # all three rows with one name and the undo could not put them back, so
+        # the device must be left untouched.
+        $conn = Open-SqliteDatabase -Path $script:DbPath
+        try {
+            $rows = Invoke-SqliteReader -Connection $conn -Sql "SELECT Name FROM DeviceStatus WHERE DeviceID = 'test_9-91-0-scene-001' ORDER BY Unit"
+        }
+        finally { $conn.Close() }
+
+        $names = @($rows | ForEach-Object { [string]$_.Name })
+        $names.Count | Should -Be 3
+        $names[0] | Should -Be 'Zone Echo - Remote - Scene 1 Pressed'
+        $names[1] | Should -Be 'Zone Echo - Remote - Scene 1 Held'
+        $names[2] | Should -Be 'Zone Echo - Remote - Scene 1 Released'
+    }
+
+    It 'tells the user why the ambiguous device was skipped' {
+        $script:Output | Should -Match 'skipped'
+        $script:Output | Should -Match 'test_9-91-0-scene-001'
+        $script:Output | Should -Match 'Ambiguous'
+    }
+
+    It 'does not let another device take a name held by a non-primary row' {
+        # Only one row per DeviceID is loaded into memory, so the names on the
+        # other rows would be invisible to collision detection unless seeded
+        # explicitly. Every distinct name in the table must be treated as taken.
+        $conn = Open-SqliteDatabase -Path $script:DbPath
+        try {
+            $rows = Invoke-SqliteReader -Connection $conn -Sql "SELECT Name, COUNT(*) AS n FROM DeviceStatus GROUP BY Name HAVING COUNT(*) > 1"
+        }
+        finally { $conn.Close() }
+
+        # The only legitimately repeated name belongs to the three rows of the
+        # ambiguous device itself, which were left alone. Nothing else may share.
+        @($rows) | Should -BeNullOrEmpty
     }
 
     It 'leaves no duplicate device names in the end state' {

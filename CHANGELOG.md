@@ -2,7 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [2.11] - 2026-08-20
+
+**Fixes a data-loss bug.** A DeviceID is not unique in Domoticz: a multi-unit device, most commonly a Central Scene remote, is stored as one DeviceID with several `Unit` rows. The tool read only one of those rows but wrote with `WHERE DeviceID = ...`, hitting all of them. If you had named the units individually, a rename silently collapsed every one of them to the same name, reported `Collisions: 0`, and wrote an undo statement that also matched on DeviceID alone, so the undo script overwrote all the rows with a single name rather than restoring the originals. The recovery path destroyed the evidence.
+
+Such devices are now detected and skipped, because the tool cannot do better: one Z-Wave value yields one label, so there is no information available to give several units several names. They are reported on the console, in a **Skipped: ambiguous devices** section of the HTML report, and as an `Ambiguous` count in the summary that appears only when it is above zero. Collision detection also now treats every distinct name in `DeviceStatus` as taken, not just one name per DeviceID, closing a second hole where another device could be renamed onto a name held by a non-primary row.
+
+Devices whose rows agree are unaffected and rename exactly as before.
+
 
 **Documentation site**: the reference and task content moved out of the README into a Zensical site published at <https://rouzax.github.io/Rename-Domoticz-From-ZwaveJSON/>, and `readme.md` dropped from 616 lines to 78. Reading live from zwave-js-ui with `-ZwaveJsUrl` is now the documented primary route, with the JSON export presented as the alternative. Writing the pages against the script rather than the README surfaced several long-standing errors, now corrected: CustomImage value 9 was labelled "Fire" but is "Computer"; the SwitchType and CustomImage tables held only 7 of 21 and 3 of 7 rows; undo SQL is not written on dry runs or no-change runs while CSV is; an unresolvable collision drops every pending change for that device, not just the name; and `rename_rules.json` is loaded from the script's own directory, not the working directory.
 
