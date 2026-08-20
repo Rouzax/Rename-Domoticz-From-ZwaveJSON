@@ -101,25 +101,36 @@ proceeds (or previews) without asking.
 
 A DeviceID is not unique in Domoticz. A multi-unit device, most commonly a
 Central Scene remote, is stored as one DeviceID with several `Unit` rows, and
-every write this tool makes matches on DeviceID alone.
+every write this tool makes targets a specific row.
 
-When those rows agree on their name, the tool renames them together as normal
-and you will never notice. When they **disagree**, because you named the units
-individually in Domoticz, the tool skips the device entirely and says so:
+The tool reads the Z-Wave value's `states` array (for example `KeyPressed`,
+`KeyReleased`, `KeyHeldDown` on a Central Scene button) and, when it can match
+every `Unit` row to a state, renames each row individually from its own state
+label, even if the rows currently disagree on their name. See
+[Multi-unit devices](../rules/naming.md#multi-unit-devices) for the naming
+scheme and how to change the bundled labels.
+
+It skips the device entirely, leaving every row exactly as it was, only when
+that mapping cannot be established:
+
+- the Z-Wave value carries no `states` array at all, or
+- the number of Domoticz rows does not match the number of states the value
+  reports.
 
 ```text
   !  1 device(s) skipped: several Domoticz rows share the DeviceID and disagree
      Renaming would collapse them into one name, and the undo script could not restore them.
 ```
 
-It cannot do better. One Z-Wave value yields one label, so there is no
-information available to give three units three names, and renaming would
-overwrite all of them with the same one. Because the undo statement also matches
-on DeviceID alone, the undo script could not put the originals back either.
+In that case it cannot do better: with no reliable way to tell which row
+means what, renaming would either overwrite every row with the same name or
+guess wrong, and the undo statement matches the same row, so a bad guess
+could not be told apart from a correct one either.
 
 These appear in the summary as `Ambiguous`, which is shown only when the count
 is above zero, and in the HTML report under **Skipped: ambiguous devices**. If
-you want them renamed, rename them in Domoticz.
+you want them renamed, rename them in Domoticz, or check that your zwave-js-ui
+export includes the value's `states` array.
 
 ## Automation
 

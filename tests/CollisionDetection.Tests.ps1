@@ -74,6 +74,10 @@ BeforeAll {
     #   node 16 - a device on another endpoint that wants exactly the name node
     #             15's unit 0 keeps. It must be disambiguated, not silently
     #             allowed to duplicate that name.
+    #   node 17 - three rows and three states, but one state's `text` is null.
+    #             Casting it to [string] would silently succeed as "", mapping
+    #             a unit to a blank label and leaving its device name ending
+    #             in a bare " - " instead of falling back.
     $script:NodesJson = @'
 [
   {
@@ -185,6 +189,18 @@ BeforeAll {
     "values": [
       { "id": "16-49-1-Custom", "label": "Scene 006 - Short" }
     ]
+  },
+  {
+    "id": 17, "loc": "Zone Lima", "name": "Remote", "productLabel": "TESTREM9",
+    "values": [
+      { "id": "17-91-0-scene-007", "label": "Scene 007",
+        "states": [
+          { "value": 0, "text": "KeyPressed" },
+          { "value": 1, "text": null },
+          { "value": 2, "text": "KeyHeldDown" }
+        ]
+      }
+    ]
   }
 ]
 '@
@@ -225,6 +241,7 @@ BeforeAll {
         'test_14-91-0-scene-005'                          = 'Zone Juliet - Remote - A'                   # three units, state values are not numbers
         'test_15-91-0-scene-006'                          = 'Zone Kilo - Remote - Scene 006 - Short'     # three units sharing one name; unit 0 keeps it
         'test_16-49-1-Custom'                             = 'Zone Kilo - Remote - Old Y'                 # wants the name unit 0 of node 15 keeps
+        'test_17-91-0-scene-007'                          = 'Zone Lima - Remote - A'                     # three units, one state text is null
     }
 
     # Additional DeviceStatus rows that share a DeviceID with an entry above but
@@ -245,6 +262,8 @@ BeforeAll {
         @{ DeviceID = 'test_14-91-0-scene-005'; Name = 'Zone Juliet - Remote - C';           Unit = 2 }
         @{ DeviceID = 'test_15-91-0-scene-006'; Name = 'Zone Kilo - Remote - Scene 006 - Short'; Unit = 1 }
         @{ DeviceID = 'test_15-91-0-scene-006'; Name = 'Zone Kilo - Remote - Scene 006 - Short'; Unit = 2 }
+        @{ DeviceID = 'test_17-91-0-scene-007'; Name = 'Zone Lima - Remote - B';             Unit = 1 }
+        @{ DeviceID = 'test_17-91-0-scene-007'; Name = 'Zone Lima - Remote - C';             Unit = 2 }
     )
 
     # Domoticz device Type per DeviceID (82 = Temp+Humidity). Others default to 0.
@@ -414,6 +433,24 @@ Describe 'Collision detection against the end state' -Skip:(-not $EngineAvailabl
         $names[2] | Should -Be 'Zone Echo - Remote - Scene 1 Released'
     }
 
+    It 'shows the unit number in the HTML report for a multi-unit device row' {
+        $report = Get-ChildItem -LiteralPath $script:WorkDir -Filter 'rename_report-*.html' | Select-Object -First 1
+        $html = Get-Content -LiteralPath $report.FullName -Raw
+
+        $html | Should -Match 'test_10-91-0-scene-001 \(unit 0\)'
+        $html | Should -Match 'test_10-91-0-scene-001 \(unit 1\)'
+        $html | Should -Match 'test_10-91-0-scene-001 \(unit 2\)'
+    }
+
+    It 'does not show a unit number for a single-row device' {
+        # test_7 has one Domoticz row, so its device-id must render exactly as
+        # before: no "(unit N)" suffix.
+        $report = Get-ChildItem -LiteralPath $script:WorkDir -Filter 'rename_report-*.html' | Select-Object -First 1
+        $html = Get-Content -LiteralPath $report.FullName -Raw
+
+        $html | Should -Not -Match 'test_7-48-0-Any \(unit'
+    }
+
     It 'gives each unit of a Central Scene device its own name' {
         $conn = Open-SqliteDatabase -Path $script:DbPath
         try {
@@ -459,6 +496,20 @@ Describe 'Collision detection against the end state' -Skip:(-not $EngineAvailabl
             'Zone India - Remote - A', 'Zone India - Remote - B', 'Zone India - Remote - C')
         @($textValued | ForEach-Object { [string]$_.Name }) | Should -Be @(
             'Zone Juliet - Remote - A', 'Zone Juliet - Remote - B', 'Zone Juliet - Remote - C')
+    }
+
+    It 'falls back to skipping when a state text is null or empty' {
+        # A null state text passes the property check (the property exists, its
+        # value is $null) and casts to "" via [string], which would map a unit
+        # to a blank label and leave its device name ending in a bare " - ".
+        $conn = Open-SqliteDatabase -Path $script:DbPath
+        try {
+            $rows = Invoke-SqliteReader -Connection $conn -Sql "SELECT Name FROM DeviceStatus WHERE DeviceID = 'test_17-91-0-scene-007' ORDER BY Unit"
+        }
+        finally { $conn.Close() }
+
+        @($rows | ForEach-Object { [string]$_.Name }) | Should -Be @(
+            'Zone Lima - Remote - A', 'Zone Lima - Remote - B', 'Zone Lima - Remote - C')
     }
 
     It 'completes the run instead of aborting on an unusable state value' {
