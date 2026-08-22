@@ -3,7 +3,8 @@
 Full reference for every parameter the script accepts, verified against the
 `param()` block in `Rename-Domoticz-From-ZwaveJSON.ps1`. For a task-oriented
 walkthrough, see [Your first run](../getting-started/first-run.md) and
-[Running the tool](../using/running.md).
+[Running the tool](../using/running.md). For whole commands you can copy and
+adapt, jump to [Example command lines](#example-command-lines).
 
 ```powershell
 .\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db"
@@ -22,8 +23,11 @@ from both sets in the same command is rejected before the script runs.
 | `-JsonFile` | String | `FromFile` | Path to the exported JSON file from Z-Wave JS UI. |
 | `-ZwaveJsUrl` | String | `FromZwaveJs` | Base URL of a running zwave-js-ui instance, for example `https://host:8091`. Reads node data live over its socket.io API instead of a file. |
 
-Both are mandatory, positional (position 0), and mutually exclusive: the
-script requires exactly one of them.
+Both are mandatory and mutually exclusive: the script requires exactly one of
+them. Both are declared at position 0, but only `-JsonFile` is usable
+positionally. An unnamed first argument binds to the default parameter set,
+which is `FromFile`, so a bare URL is read as a file path and the run stops
+with `JSON file not found: http://host:8091`. Always name `-ZwaveJsUrl`.
 
 ### Live-mode only
 
@@ -61,3 +65,123 @@ These apply regardless of which node data source you chose:
 
 None of these are tied to a parameter set: they are accepted whether you
 used `-JsonFile` or `-ZwaveJsUrl`.
+
+## Example command lines
+
+Every example previews with `-DryRun` where a preview makes sense. Run a
+preview first, read the report, and only then run the same command without it.
+Before applying, stop Domoticz: it caches device rows in memory and can write
+the old names back over your renames.
+
+**Preview a live instance.** The shortest useful command, and the one to start
+with:
+
+```powershell
+.\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "http://zwave-host:8091" `
+    -DbPath "domoticz.db" -DryRun
+```
+
+**Apply it.** The same command without `-DryRun`, which prompts for
+confirmation before writing:
+
+```powershell
+.\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "http://zwave-host:8091" `
+    -DbPath "domoticz.db"
+```
+
+**A zwave-js-ui that requires login.** How you pass the login depends on where
+you type the command, because a POSIX shell parses `(Get-Credential)` before
+PowerShell ever sees it:
+
+=== "PowerShell session"
+
+    ```powershell
+    .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "https://zwave-host:8091" `
+        -DbPath "domoticz.db" -ZwaveJsCredential (Get-Credential) -DryRun
+    ```
+
+    Prompts for both the username and the password.
+
+=== "bash, zsh or a Pi terminal"
+
+    ```bash
+    pwsh ./Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "https://zwave-host:8091" \
+        -DbPath "/home/user/domoticz.db" -ZwaveJsUser admin -DryRun
+    ```
+
+    Prompts for the password only. See
+    [Running from bash, zsh or a Pi terminal](../getting-started/input-modes.md#running-from-bash-zsh-or-a-pi-terminal).
+
+**From a JSON export** instead of a live instance, for when zwave-js-ui is not
+reachable from here:
+
+```powershell
+.\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" `
+    -DbPath "domoticz.db" -DryRun
+```
+
+`-JsonFile` and `-DbPath` are positional, in that order, so this is the same
+command:
+
+```powershell
+.\Rename-Domoticz-From-ZwaveJSON.ps1 "nodes_dump.json" "domoticz.db" -DryRun
+```
+
+**With your own renaming rules:**
+
+```powershell
+.\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "http://zwave-host:8091" `
+    -DbPath "domoticz.db" -RulesFile "my_rules.json" -DryRun
+```
+
+**Leaving some devices alone.** `-ExcludeDeviceIds` takes exact DeviceIDs,
+`-ExcludePattern` a regex; the two can be combined:
+
+```powershell
+.\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "http://zwave-host:8091" `
+    -DbPath "domoticz.db" `
+    -ExcludeDeviceIds "zwavejs2mqtt_0xc15d8aa6_42-49-0-Air_temperature" `
+    -ExcludePattern 'node\d+$' `
+    -DryRun
+```
+
+Use single quotes around a regex: in a double-quoted PowerShell string, `$`
+introduces variable expansion.
+
+**Putting every output file where you want it.** Without these, each file
+lands next to the database; see
+[Where files land](../using/output.md#where-files-land):
+
+```powershell
+.\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "http://zwave-host:8091" `
+    -DbPath "domoticz.db" `
+    -LogFile "reports/rename.log" `
+    -CsvFile "reports/rename.csv" `
+    -HtmlReport "reports/rename.html" `
+    -UndoFile "reports/undo.sql"
+```
+
+`-CsvFile` is the only one of the four that changes what is produced: no CSV is
+written unless you ask for one.
+
+**A scheduled or unattended run.** `-Force` skips all three interactive prompts
+(the database-in-use warning, the collision prompt, and the final
+confirmation), and a saved credential avoids needing a console to type into:
+
+```powershell
+& .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "https://zwave-host:8091" `
+    -DbPath "domoticz.db" `
+    -ZwaveJsCredential (Import-CliXml ./zwave.cred) `
+    -Force
+switch ($LASTEXITCODE) {
+    0 { "Renamed successfully" }
+    2 { "Nothing to do" }
+    default { "Rename run needs attention (exit $LASTEXITCODE)" }
+}
+```
+
+Save the credential once, interactively, with
+`Get-Credential | Export-CliXml ./zwave.cred`, and keep that file out of
+version control. Do not use `-ZwaveJsUser` here: it has to prompt for a
+password, and a run with no console to prompt at stops with exit code `1`. See
+[Exit codes](exit-codes.md) for what each code means.
