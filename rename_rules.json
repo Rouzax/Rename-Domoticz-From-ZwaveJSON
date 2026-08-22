@@ -27,6 +27,27 @@
   ],
   "rules": [
     {
+      "name": "Central Scene KeyPressed",
+      "pattern": "91-\\d+-scene-\\d+$",
+      "replace": " - KeyPressed$",
+      "with": " - Short",
+      "description": "Central Scene: short press. Domoticz stores one Unit row per key state, and the state text is appended to the name before these rules run"
+    },
+    {
+      "name": "Central Scene KeyReleased",
+      "pattern": "91-\\d+-scene-\\d+$",
+      "replace": " - KeyReleased$",
+      "with": " - Released",
+      "description": "Central Scene: key released after a hold"
+    },
+    {
+      "name": "Central Scene KeyHeldDown",
+      "pattern": "91-\\d+-scene-\\d+$",
+      "replace": " - KeyHeldDown$",
+      "with": " - Held",
+      "description": "Central Scene: key held down"
+    },
+    {
       "name": "RGBW Red Channel",
       "pattern": "38-2-currentValue$",
       "replace": " - Current value$",
