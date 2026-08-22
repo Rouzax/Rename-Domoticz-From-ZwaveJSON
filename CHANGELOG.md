@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+**Log in instead of handling a token**: new `-ZwaveJsCredential` takes a `PSCredential`, and the script authenticates against zwave-js-ui itself and uses the token it gets back. You no longer fetch a JWT out of band, paste it somewhere, or care that it expires, because every run logs in fresh. Use `(Get-Credential)` to be prompted, or `Import-CliXml` for an unattended run. The password stays in a `SecureString` and is converted to plaintext only for the login request body. `-ZwaveJsToken` is unchanged and still works; supplying both is an error rather than a silent preference. Sending a password over `http://` warns more sharply than sending a token did, because a captured token expires while a captured password does not.
+
 ## [2.12] - 2026-08-22
 
 **Read this before upgrading if you have Central Scene remotes (scene controllers, wall switches with key-press events).** This is the first release that renames Domoticz devices you were already using, rather than only new or previously-untouched ones. On the reference installation, Units 0 and 1 are in use on all 16 scene devices, and any automation that looks a device up by name rather than `idx` will break the moment that name changes. Run with `-DryRun` first and read the proposed names before applying, and keep the undo script from the run in case an automation needs to be pointed at an old name.

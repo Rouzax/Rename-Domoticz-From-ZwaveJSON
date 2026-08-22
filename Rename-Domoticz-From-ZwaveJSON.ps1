@@ -42,6 +42,13 @@
     instance is not reachable from here, or when you want a frozen snapshot.
     Mandatory: one of -ZwaveJsUrl or -JsonFile.
 
+.PARAMETER ZwaveJsCredential
+    Username and password for a zwave-js-ui with authentication enabled. The
+    script logs in itself and uses the token it gets back, so you never have to
+    obtain or store one, and expiry stops mattering because each run logs in
+    fresh. Prefer this over -ZwaveJsToken. Use (Get-Credential) to be prompted,
+    or Import-CliXml for an unattended run.
+
 .PARAMETER ZwaveJsToken
     Optional auth token for a zwave-js-ui with authentication enabled. Over http
     it is sent in cleartext (allowed, with a warning); prefer https on untrusted
@@ -139,6 +146,10 @@ param (
     [Parameter(ParameterSetName = 'FromZwaveJs',
         HelpMessage = "Auth token if zwave-js-ui has authentication enabled. Over http it is sent in cleartext (allowed, with a warning). Prefer passing via an environment variable, not inline.")]
     [string]$ZwaveJsToken,
+
+    [Parameter(ParameterSetName = 'FromZwaveJs',
+        HelpMessage = "Credential for a zwave-js-ui with authentication enabled; the script logs in and obtains its own token")]
+    [pscredential]$ZwaveJsCredential,
 
     [Parameter(ParameterSetName = 'FromZwaveJs',
         HelpMessage = "Skip TLS validation for a self-signed https zwave-js-ui")]
@@ -1797,7 +1808,7 @@ if ($PSCmdlet.ParameterSetName -eq 'FromZwaveJs') {
     Write-Host "  Reading nodes from zwave-js-ui at $ZwaveJsUrl..." -ForegroundColor Gray
     try {
         Import-Module (Join-Path $PSScriptRoot 'modules/ZwaveJsClient/ZwaveJsClient.psd1') -Force -ErrorAction Stop
-        $ZwaveData = Get-ZwaveJsNodes -Url $ZwaveJsUrl -Token $ZwaveJsToken -SkipCertificateCheck:$SkipCertificateCheck
+        $ZwaveData = Get-ZwaveJsNodes -Url $ZwaveJsUrl -Token $ZwaveJsToken -Credential $ZwaveJsCredential -SkipCertificateCheck:$SkipCertificateCheck
     }
     catch {
         Write-Host "  ❌ ERROR: $($_.Exception.Message)" -ForegroundColor Red
