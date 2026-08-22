@@ -31,17 +31,36 @@ names before and after a Z-Wave JS UI configuration change).
     Auto-Discovery in the first place, because the script needs the base
     device identifier from the discovery payload.
 
-    **Authentication.** If your instance requires login, pass
-    `-ZwaveJsCredential`, and the script logs in for you:
+    **Authentication.** If your instance requires login, pass `-ZwaveJsUser`
+    with your zwave-js-ui username (`admin` on a default install). The script
+    prompts for the password and logs in for you:
+
+    ```powershell
+    .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "https://zwave-host:8091" -ZwaveJsUser admin -DbPath "domoticz.db" -DryRun
+    ```
+
+    The password is prompted for rather than typed on the command line, so it
+    never reaches your shell history or the process list, and it is not written
+    to the log or the HTML report. The script exchanges it for a session token
+    itself, so you never obtain, paste or store a token, and token expiry stops
+    mattering because each run logs in fresh.
+
+    `-ZwaveJsUser` needs a console to prompt at. Given none, the run stops with
+    an error instead of continuing, so a scheduled run can never look like a
+    success that renamed nothing. For unattended use, pass a saved credential
+    instead (below).
+
+    `-ZwaveJsCredential` takes a `PSCredential`, for when you already hold one
+    or want to be prompted for the username too:
 
     ```powershell
     .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "https://zwave-host:8091" -ZwaveJsCredential (Get-Credential) -DbPath "domoticz.db" -DryRun
     ```
 
-    `Get-Credential` prompts for the username and password without either
-    appearing in your shell history or in the process list. The script exchanges
-    them for a session token itself, so you never obtain, paste or store a token,
-    and token expiry stops mattering because each run logs in fresh.
+    That form only works from inside a PowerShell session. See
+    [Running from bash, zsh or a Pi terminal](#running-from-bash-zsh-or-a-pi-terminal)
+    below if you launch the script with `pwsh ./Rename-Domoticz-From-ZwaveJSON.ps1`.
+    Supplying both `-ZwaveJsUser` and `-ZwaveJsCredential` is an error.
 
     For an unattended run, save the credential once and read it back:
 
@@ -74,6 +93,33 @@ names before and after a Z-Wave JS UI configuration change).
     Avoid combining it with `-ZwaveJsCredential` or `-ZwaveJsToken`: an
     unverified server could intercept whichever you send. The script warns when
     you combine them. Prefer a trusted certificate over skipping validation.
+
+    #### Running from bash, zsh or a Pi terminal
+
+    If you start the script from a POSIX shell rather than from inside
+    PowerShell, the shell parses the command line first, and
+    `-ZwaveJsCredential (Get-Credential)` fails before PowerShell ever sees it:
+
+    ```console
+    $ pwsh ./Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "http://localhost:8091" -ZwaveJsCredential (Get-Credential) ...
+    bash: syntax error near unexpected token `('
+    ```
+
+    Use `-ZwaveJsUser` instead. It takes a plain username, needs no
+    sub-expression, and so reaches PowerShell untouched:
+
+    ```bash
+    pwsh ./Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "http://localhost:8091" \
+        -DbPath "/home/user/docker/data/domoticz/config/domoticz.db" \
+        -ZwaveJsUser admin -DryRun
+    ```
+
+    If you would rather be prompted for the username too, hand the whole command
+    to PowerShell in single quotes so the shell leaves the parentheses alone:
+
+    ```bash
+    pwsh -c './Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "http://localhost:8091" -DbPath "/home/user/domoticz.db" -ZwaveJsCredential (Get-Credential) -DryRun'
+    ```
 
 === "JSON export"
 

@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.13.1] - 2026-08-22
+
+**New `-ZwaveJsUser`: log in by username and be prompted for the password.** Authenticating meant `-ZwaveJsCredential (Get-Credential)`, which assumed you were already inside a PowerShell session. Launching the script from a POSIX shell as `pwsh ./Rename-Domoticz-From-ZwaveJSON.ps1 ...`, the common case on a Raspberry Pi, meant bash or zsh parsed the command line first and died on the parentheses before PowerShell ever saw them. `-ZwaveJsUser admin` is a plain string, so it reaches PowerShell untouched. The password is prompted for and never appears in the shell history, the process list, the log, or the HTML report.
+
+`-ZwaveJsUser` needs a console to prompt at, and stops the run with exit code `1` when it has none rather than continuing. This is deliberate: PowerShell's own `[Credential()]` transformation attribute would have accepted a username on `-ZwaveJsCredential` with no new parameter, but when it cannot prompt it aborts during parameter binding, before the script runs, and the process exits `0`. A scheduled run that renamed nothing while reporting success is the one outcome this tool's exit codes must never produce. For unattended runs, `-ZwaveJsCredential (Import-CliXml ./zwave.cred)` is unchanged. Supplying both `-ZwaveJsUser` and `-ZwaveJsCredential` is an error.
+
+**A rejected connection now names the option to reach for next.** The error said "requires authentication - pass -ZwaveJsToken" whatever you had supplied, sending anyone who passed a credential back to the token workflow the credential exists to replace. It now distinguishes no login supplied, a token that was not accepted (most often an expired one, which logging in avoids by obtaining a fresh token each run), and a credential whose login succeeded but whose token was then refused.
+
+**Internal**: the version number lived in three places (the banner, the HTML report footer, the help block) and had already drifted. The banner and footer now read one `$Script:Version` constant.
+
+Docs: the input-modes page gains a section on running from bash, zsh or a Pi terminal, and the troubleshooting page gains the symptoms this produced.
+
 ## [2.13] - 2026-08-22
 
 **Log in instead of handling a token**: new `-ZwaveJsCredential` takes a `PSCredential`, and the script authenticates against zwave-js-ui itself and uses the token it gets back. You no longer fetch a JWT out of band, paste it somewhere, or care that it expires, because every run logs in fresh. Use `(Get-Credential)` to be prompted, or `Import-CliXml` for an unattended run. The password stays in a `SecureString` and is converted to plaintext only for the login request body. `-ZwaveJsToken` is unchanged and still works; supplying both is an error rather than a silent preference. Sending a password over `http://` warns more sharply than sending a token did, because a captured token expires while a captured password does not.

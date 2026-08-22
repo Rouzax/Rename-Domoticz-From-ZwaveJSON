@@ -335,7 +335,22 @@ function Get-ZwaveJsNodes {
         # 3. connect ack / error
         $ackPkt = ConvertFrom-SocketIoPacket -Packet (Receive-WsMessage -WebSocket $ws -CancellationToken $tok -MaxBytes $maxBytes)
         $connErr = Get-SocketIoConnectError -Packets @($ackPkt)
-        if ($connErr) { throw "zwave-js-ui requires authentication - pass -ZwaveJsToken. ($connErr)" }
+        if ($connErr) {
+            # Name the option the caller should reach for next, which depends on
+            # what they already supplied: telling someone who passed a credential
+            # to "pass -ZwaveJsToken" sends them back to the workflow the
+            # credential exists to replace.
+            $fix = if ($tokenCameFromCredential) {
+                "the login for '$($Credential.UserName)' succeeded but the token it returned was not accepted"
+            }
+            elseif ($Token) {
+                '-ZwaveJsToken was not accepted, and a token that worked before may simply have expired; -ZwaveJsCredential obtains a fresh one on every run'
+            }
+            else {
+                'it requires authentication, so pass -ZwaveJsCredential with your zwave-js-ui username (the password is prompted for), or -ZwaveJsToken if you already hold a token'
+            }
+            throw "zwave-js-ui rejected the connection: $fix. ($connErr)"
+        }
 
         # 4. request state: emit the 'INITED' event (data true, ack id 0)
         Send-WsText -WebSocket $ws -Text '420["INITED",true]' -CancellationToken $tok
