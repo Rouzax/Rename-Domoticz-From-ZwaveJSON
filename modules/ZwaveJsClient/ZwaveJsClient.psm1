@@ -163,6 +163,89 @@ function Receive-WsMessage {
     finally { $ms.Dispose() }
 }
 
+function Get-ZwaveJsToken {
+    <#
+    .SYNOPSIS
+        Exchanges a zwave-js-ui username and password for a session token.
+    .DESCRIPTION
+        zwave-js-ui authenticates over plain HTTP: POST /api/authenticate with a
+        username and password returns a JSON body carrying the JWT that the
+        socket handshake then expects.
+
+        Logging in per run is preferable to handing the script a token: a token
+        has to be fetched out of band, pasted somewhere, and expires without
+        warning, whereas a credential can be prompted for interactively or read
+        from an encrypted file, and each run gets a fresh token.
+
+        The password is converted from its SecureString only for the duration of
+        the request body and is never returned, logged, or written to any output
+        file.
+    .OUTPUTS
+        The token string.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [Parameter(Mandatory)][pscredential]$Credential,
+        [switch]$SkipCertificateCheck,
+        [int]$TimeoutSec = 30
+    )
+
+    $u = try { [Uri]$Url } catch { throw "Invalid zwave-js-ui URL: $Url" }
+    if ($u.Scheme -notin 'http', 'https') {
+        throw "zwave-js-ui URL must be http:// or https:// ($Url)."
+    }
+
+    # A password is a longer-lived secret than a token, so this warning is
+    # sharper than the token one: a captured password grants access until it is
+    # changed, while a captured token expires.
+    if ($u.Scheme -eq 'http') {
+        Write-Warning "Logging in to $Url over http: the password is transmitted in cleartext. Use https:// unless this is a trusted LAN or localhost."
+    }
+    if ($SkipCertificateCheck) {
+        Write-Warning "-SkipCertificateCheck disables TLS validation; a password sent to an unverified server can be intercepted."
+    }
+
+    $endpoint = "$($u.Scheme)://$($u.Authority)/api/authenticate"
+    $body = @{
+        username = $Credential.UserName
+        password = $Credential.GetNetworkCredential().Password
+    } | ConvertTo-Json -Compress
+
+    $params = @{
+        Uri         = $endpoint
+        Method      = 'Post'
+        Body        = $body
+        ContentType = 'application/json'
+        TimeoutSec  = $TimeoutSec
+        ErrorAction = 'Stop'
+    }
+    if ($SkipCertificateCheck) { $params.SkipCertificateCheck = $true }
+
+    try {
+        $response = Invoke-RestMethod @params
+    }
+    catch {
+        throw "Could not reach zwave-js-ui at $endpoint to log in: $($_.Exception.Message)"
+    }
+    finally {
+        # Drop the plaintext password as soon as the request is done rather than
+        # leaving it in a variable for the rest of the scope.
+        $body = $null
+        $params = $null
+    }
+
+    if (-not $response.success) {
+        $reason = if ($response.message) { $response.message } else { 'no reason given' }
+        throw "zwave-js-ui rejected the credential for user '$($Credential.UserName)': $reason"
+    }
+    if (-not $response.user -or [string]::IsNullOrWhiteSpace($response.user.token)) {
+        throw "zwave-js-ui accepted the login but returned no token. The server may be a version this script does not understand."
+    }
+
+    return [string]$response.user.token
+}
+
 function Get-ZwaveJsNodes {
     <#
     .SYNOPSIS
@@ -179,9 +262,22 @@ function Get-ZwaveJsNodes {
     param(
         [Parameter(Mandatory)][string]$Url,
         [string]$Token,
+        [pscredential]$Credential,
         [switch]$SkipCertificateCheck,
         [int]$TimeoutSec = 30
     )
+
+    # A credential is exchanged for a fresh token before the socket is opened,
+    # so the caller never has to obtain or store one. Supplying both is a
+    # mistake worth naming rather than silently preferring one.
+    if ($Credential -and $Token) {
+        throw "Supply either a credential or a token, not both."
+    }
+    $tokenCameFromCredential = $false
+    if ($Credential) {
+        $Token = Get-ZwaveJsToken -Url $Url -Credential $Credential -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSec $TimeoutSec
+        $tokenCameFromCredential = $true
+    }
 
     $u = try { [Uri]$Url } catch { throw "Invalid zwave-js-ui URL: $Url" }
     $wsScheme = switch ($u.Scheme) {
@@ -193,10 +289,14 @@ function Get-ZwaveJsNodes {
     # The token is a credential. Over http it travels in cleartext, which is
     # usually fine on a trusted LAN (the common case) but risky on an open
     # network, so warn rather than refuse.
-    if ($Token -and $wsScheme -eq 'ws') {
+    # Only warn about the token when the caller actually supplied one. A token
+    # obtained from -ZwaveJsCredential has already produced a sharper warning
+    # during login, and naming -ZwaveJsToken here would point the reader at a
+    # parameter they never used.
+    if ($Token -and -not $tokenCameFromCredential -and $wsScheme -eq 'ws') {
         Write-Warning "Sending -ZwaveJsToken to $Url over http: the token is transmitted in cleartext. Fine on a trusted LAN; use https:// if the traffic could be observed."
     }
-    if ($Token -and $SkipCertificateCheck) {
+    if ($Token -and -not $tokenCameFromCredential -and $SkipCertificateCheck) {
         Write-Warning "-SkipCertificateCheck disables TLS validation; a token sent to an unverified server can be intercepted."
     }
 
@@ -284,4 +384,4 @@ function Get-ZwaveJsNodes {
     }
 }
 
-Export-ModuleMember -Function Get-ZwaveJsNodes
+Export-ModuleMember -Function Get-ZwaveJsNodes, Get-ZwaveJsToken

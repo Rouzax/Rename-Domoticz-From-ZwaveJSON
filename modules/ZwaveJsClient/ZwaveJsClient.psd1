@@ -5,7 +5,7 @@
     Author            = 'Rouzax'
     Description       = 'Reads Z-Wave node data live from a zwave-js-ui instance over its socket.io API (engine.io v4 HTTP long-polling).'
     PowerShellVersion = '7.0'
-    FunctionsToExport = @('Get-ZwaveJsNodes')
+    FunctionsToExport = @('Get-ZwaveJsNodes', 'Get-ZwaveJsToken')
     CmdletsToExport   = @()
     VariablesToExport = @()
     AliasesToExport   = @()
