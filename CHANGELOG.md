@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [2.12] - 2026-08-20
+## [2.12] - 2026-08-22
 
 **Read this before upgrading if you have Central Scene remotes (scene controllers, wall switches with key-press events).** This is the first release that renames Domoticz devices you were already using, rather than only new or previously-untouched ones. On the reference installation, Units 0 and 1 are in use on all 16 scene devices, and any automation that looks a device up by name rather than `idx` will break the moment that name changes. Run with `-DryRun` first and read the proposed names before applying, and keep the undo script from the run in case an automation needs to be pointed at an old name.
 
