@@ -672,10 +672,13 @@ function Get-UnitStateMap {
         # on the cast and, under $ErrorActionPreference = 'Stop', abort the run
         # instead of falling back. Both must return $null like any other doubt.
         if ($s.value -isnot [int] -and -not [int]::TryParse([string]$s.value, [ref]$null)) { return $null }
-        # A null or empty text is the same kind of doubt: casting $null to
-        # [string] silently succeeds as "", which would map a unit to a blank
-        # label and leave its device name ending in a bare " - ".
-        if ([string]::IsNullOrEmpty($s.text)) { return $null }
+        # A null, empty, or whitespace-only text is the same kind of doubt:
+        # casting $null to [string] silently succeeds as "", and a
+        # whitespace-only or trailing-space text would be written verbatim,
+        # since only the base name is whitespace-normalized, not this suffix.
+        # Either would leave a device name ending in a bare " - " or with a
+        # stray trailing space.
+        if ([string]::IsNullOrWhiteSpace($s.text)) { return $null }
         $map[[int]$s.value] = [string]$s.text
     }
     foreach ($u in $Units) {
@@ -1171,7 +1174,11 @@ $hint
 "@
     }
 
-    $deviceCount = if ($RenameList) { $RenameList.Count } else { 0 }
+    # This counts RenameList entries, not distinct devices: a multi-unit
+    # device whose rows were named individually contributes one entry per
+    # row, so the heading below says "entries", matching how Renamed and
+    # Unchanged already count per row rather than per device.
+    $entryCount = if ($RenameList) { $RenameList.Count } else { 0 }
 
     $html = @"
 <!DOCTYPE html>
@@ -1658,7 +1665,7 @@ $hint
 
         $ambiguousSection
 
-        <h2>📝 Updated Devices <span class="count">($deviceCount devices)</span></h2>
+        <h2>📝 Updated Devices <span class="count">($entryCount entries)</span></h2>
         
         <div class="toolbar">
             <div class="search-box">
@@ -2306,8 +2313,15 @@ foreach ($Device in $ZwaveData) {
                     if ($endpointsDiffer -and $existingIsPending) {
                         # Both sides are pending renames on different endpoints:
                         # disambiguate BOTH by appending their endpoint numbers.
+                        #
+                        # Match on the contested name, not on DeviceID alone: a
+                        # mapped multi-unit device can have several RenameList
+                        # entries sharing one DeviceID, only one of which holds
+                        # the name actually in contention. Matching by DeviceID
+                        # alone risks suffixing the wrong row.
                         foreach ($item in $Script:RenameList) {
-                            if ($item.DeviceID -eq $existingDeviceId -and $item.NameChanged) {
+                            if ($item.DeviceID -eq $existingDeviceId -and $item.NameChanged -and
+                                (($item.NewName -replace '\s{2,}', ' ').Trim()) -eq $contestedName) {
                                 $item.NewName = "$($item.NewName) - EP$existingEndpoint"
                                 break
                             }
@@ -2705,7 +2719,27 @@ $finalCsvPath = $null
 if (-not [string]::IsNullOrWhiteSpace($CsvFile) -and $Script:RenameList.Count -gt 0) {
     $finalCsvPath = Write-SafeFile -PrimaryPath $CsvPrimary -FallbackDbPath $CsvDbFallback -FallbackTempPath $CsvTempFallback -Description "Renaming summary" -Writer {
         param([string]$Path)
-        $Script:RenameList.ToArray() | Export-Csv -Path $Path -NoTypeInformation -Encoding UTF8
+        # Select the documented columns explicitly rather than exporting the
+        # RenameList objects as-is: they also carry Units (an int array) and
+        # OldNamesByUnit (a hashtable), needed internally for per-row writes
+        # and undo, which Export-Csv would otherwise serialize as the literal
+        # strings "System.Object[]" and "System.Collections.Hashtable". Unit
+        # is a real scalar: the single Domoticz Unit this row covers when the
+        # entry names one row individually, blank when it covers every Unit
+        # of a device whose rows still share one name.
+        $Script:RenameList.ToArray() | Select-Object -Property `
+            DeviceID,
+            @{ Name = 'Unit'; Expression = { if (@($_.Units).Count -eq 1) { [string]@($_.Units)[0] } else { '' } } },
+            OldName,
+            NewName,
+            OldSwitchType,
+            NewSwitchType,
+            OldCustomImage,
+            NewCustomImage,
+            NameChanged,
+            SwitchTypeChanged,
+            CustomImageChanged |
+            Export-Csv -Path $Path -NoTypeInformation -Encoding UTF8
     }
 }
 

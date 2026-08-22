@@ -78,6 +78,11 @@ BeforeAll {
     #             Casting it to [string] would silently succeed as "", mapping
     #             a unit to a blank label and leaving its device name ending
     #             in a bare " - " instead of falling back.
+    #   node 18 - three rows and three states, but one state's `text` is a
+    #             single space (whitespace-only, not empty). IsNullOrEmpty
+    #             would let it through, since only the base name is
+    #             whitespace-normalized and not this suffix, leaving a
+    #             device name with a stray trailing space.
     $script:NodesJson = @'
 [
   {
@@ -201,6 +206,18 @@ BeforeAll {
         ]
       }
     ]
+  },
+  {
+    "id": 18, "loc": "Zone Mike", "name": "Remote", "productLabel": "TESTREM10",
+    "values": [
+      { "id": "18-91-0-scene-008", "label": "Scene 008",
+        "states": [
+          { "value": 0, "text": "KeyPressed" },
+          { "value": 1, "text": " " },
+          { "value": 2, "text": "KeyHeldDown" }
+        ]
+      }
+    ]
   }
 ]
 '@
@@ -242,6 +259,7 @@ BeforeAll {
         'test_15-91-0-scene-006'                          = 'Zone Kilo - Remote - Scene 006 - Short'     # three units sharing one name; unit 0 keeps it
         'test_16-49-1-Custom'                             = 'Zone Kilo - Remote - Old Y'                 # wants the name unit 0 of node 15 keeps
         'test_17-91-0-scene-007'                          = 'Zone Lima - Remote - A'                     # three units, one state text is null
+        'test_18-91-0-scene-008'                          = 'Zone Mike - Remote - A'                     # three units, one state text is whitespace-only
     }
 
     # Additional DeviceStatus rows that share a DeviceID with an entry above but
@@ -264,6 +282,8 @@ BeforeAll {
         @{ DeviceID = 'test_15-91-0-scene-006'; Name = 'Zone Kilo - Remote - Scene 006 - Short'; Unit = 2 }
         @{ DeviceID = 'test_17-91-0-scene-007'; Name = 'Zone Lima - Remote - B';             Unit = 1 }
         @{ DeviceID = 'test_17-91-0-scene-007'; Name = 'Zone Lima - Remote - C';             Unit = 2 }
+        @{ DeviceID = 'test_18-91-0-scene-008'; Name = 'Zone Mike - Remote - B';             Unit = 1 }
+        @{ DeviceID = 'test_18-91-0-scene-008'; Name = 'Zone Mike - Remote - C';             Unit = 2 }
     )
 
     # Domoticz device Type per DeviceID (82 = Temp+Humidity). Others default to 0.
@@ -510,6 +530,24 @@ Describe 'Collision detection against the end state' -Skip:(-not $EngineAvailabl
 
         @($rows | ForEach-Object { [string]$_.Name }) | Should -Be @(
             'Zone Lima - Remote - A', 'Zone Lima - Remote - B', 'Zone Lima - Remote - C')
+    }
+
+    It 'falls back to skipping when a state text is whitespace-only' {
+        # A single-space state text is not null or empty, so IsNullOrEmpty would
+        # let it through and IsNullOrWhiteSpace is required to catch it. Only
+        # the base name is whitespace-normalized, not this suffix, so letting
+        # it through would write a name ending in a bare " - " (the label
+        # collapses to nothing visible) rather than falling back to the skip.
+        $conn = Open-SqliteDatabase -Path $script:DbPath
+        try {
+            $rows = Invoke-SqliteReader -Connection $conn -Sql "SELECT Name FROM DeviceStatus WHERE DeviceID = 'test_18-91-0-scene-008' ORDER BY Unit"
+        }
+        finally { $conn.Close() }
+
+        $names = @($rows | ForEach-Object { [string]$_.Name })
+        @($names) | Should -Be @(
+            'Zone Mike - Remote - A', 'Zone Mike - Remote - B', 'Zone Mike - Remote - C')
+        $names | Where-Object { $_ -match ' - $' } | Should -BeNullOrEmpty
     }
 
     It 'completes the run instead of aborting on an unusable state value' {

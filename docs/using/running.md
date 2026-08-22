@@ -110,12 +110,18 @@ label, even if the rows currently disagree on their name. See
 [Multi-unit devices](../rules/naming.md#multi-unit-devices) for the naming
 scheme and how to change the bundled labels.
 
-It skips the device entirely, leaving every row exactly as it was, only when
-that mapping cannot be established:
+A device whose rows already agree on a name is unaffected either way: it is
+renamed together, as one entry covering every row, exactly as before this
+mapping existed. Only a device whose rows disagree depends on the mapping,
+and it is skipped entirely, leaving every row exactly as it was, when that
+mapping cannot be established:
 
-- the Z-Wave value carries no `states` array at all, or
+- the Z-Wave value carries no `states` array at all;
 - the number of Domoticz rows does not match the number of states the value
-  reports.
+  reports;
+- a state's value is missing or is not a whole number;
+- a state's label text is missing, empty, or whitespace-only; or
+- one of the device's `Unit` numbers has no matching state value.
 
 ```text
   !  1 device(s) skipped: several Domoticz rows share the DeviceID and disagree
