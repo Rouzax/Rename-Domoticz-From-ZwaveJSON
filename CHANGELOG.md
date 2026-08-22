@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [2.13] - 2026-08-22
 
 **Log in instead of handling a token**: new `-ZwaveJsCredential` takes a `PSCredential`, and the script authenticates against zwave-js-ui itself and uses the token it gets back. You no longer fetch a JWT out of band, paste it somewhere, or care that it expires, because every run logs in fresh. Use `(Get-Credential)` to be prompted, or `Import-CliXml` for an unattended run. The password stays in a `SecureString` and is converted to plaintext only for the login request body. `-ZwaveJsToken` is unchanged and still works; supplying both is an error rather than a silent preference. Sending a password over `http://` warns more sharply than sending a token did, because a captured token expires while a captured password does not.
 
