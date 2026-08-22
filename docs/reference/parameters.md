@@ -31,8 +31,9 @@ These two only apply, and are only accepted, alongside `-ZwaveJsUrl`:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|--------------|
-| `-ZwaveJsToken` | String | Not set | Auth token if zwave-js-ui has authentication enabled. Sent in cleartext over `http://` (allowed, with a warning); prefer `https://` on an untrusted network, or an environment variable rather than an inline value. |
-| `-SkipCertificateCheck` | Switch | `$false` | Skip TLS validation for a self-signed `https://` zwave-js-ui. Avoid combining with `-ZwaveJsToken`, since an unverified server could intercept the token; prefer a trusted certificate instead. |
+| `-ZwaveJsCredential` | PSCredential | Not set | Username and password for a zwave-js-ui with authentication enabled. The script logs in and uses the token it gets back, so you never obtain or store one and expiry stops mattering. Use `(Get-Credential)` to be prompted, or `Import-CliXml` for an unattended run. The password travels in cleartext over `http://` (allowed, with a warning); prefer `https://` off a trusted LAN. Preferred over `-ZwaveJsToken`; supplying both is an error. |
+| `-ZwaveJsToken` | String | Not set | An existing zwave-js-ui auth token, for callers that already have one. `-ZwaveJsCredential` is preferred, since it obtains a fresh token per run. Sent in cleartext over `http://` (allowed, with a warning); prefer `https://` on an untrusted network, or an environment variable rather than an inline value. |
+| `-SkipCertificateCheck` | Switch | `$false` | Skip TLS validation for a self-signed `https://` zwave-js-ui. Avoid combining with `-ZwaveJsCredential` or `-ZwaveJsToken`, since an unverified server could intercept whichever you send; prefer a trusted certificate instead. |
 
 ## Required for every run
 
