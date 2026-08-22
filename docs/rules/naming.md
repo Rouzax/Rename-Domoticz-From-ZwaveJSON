@@ -90,8 +90,13 @@ untouched, exclude them by pattern, since their DeviceID always ends in
 
 ```powershell
 .\Rename-Domoticz-From-ZwaveJSON.ps1 -JsonFile "nodes_dump.json" -DbPath "domoticz.db" `
-    -ExcludePattern 'node\d+$'
+    -ExcludePattern 'node\d+$' # (1)!
 ```
+
+1.  Matched against the DeviceID, so this excludes exactly the node-level
+    devices described above and nothing else. Keep the single quotes: in a
+    double-quoted PowerShell string, `$` introduces variable expansion, so a
+    regex written that way can reach the script altered.
 
 See [Excluding devices from a run](../using/running.md#excluding-devices)
 for the other ways to exclude devices.
@@ -120,11 +125,19 @@ you may prefer `Long` over `Released`:
 ```json
 {
   "name": "Central Scene KeyReleased",
-  "pattern": "91-\\d+-scene-\\d+$",
-  "replace": " - KeyReleased$",
-  "with": " - Long"
+  "pattern": "91-\\d+-scene-\\d+$", // (1)!
+  "replace": " - KeyReleased$", // (2)!
+  "with": " - Long" // (3)!
 }
 ```
+
+1.  Unchanged from the shipped rule. All three Central Scene rules share this
+    `pattern`, because one DeviceID covers every key state of the button.
+2.  Also unchanged, and this is the field that picks out the state: it is
+    matched against the name, which still carries the raw `KeyReleased` text at
+    this point.
+3.  The only edit. Everything else about the rule, including the two sibling
+    rules for `KeyPressed` and `KeyHeldDown`, stays as shipped.
 
 Copy `rename_rules.json`, make that one edit, and pass the copy with
 `-RulesFile`; see [Writing your own rules](writing-rules.md) for the full

@@ -42,6 +42,10 @@ language = "en"
 features = [
   "announce.dismiss",
   "content.action.edit",
+  # Annotations live in comments. JSON has none in its grammar, but Pygments'
+  # JSON lexer tokenises `//` as a comment, and the `!` suffix on the marker
+  # strips the comment at render time, so the rule examples stay copy-clean
+  # and valid JSON. Do not "fix" the `//` out of the JSON blocks in docs/rules.
   "content.code.annotate",
   "content.code.copy",
   "content.code.select",
