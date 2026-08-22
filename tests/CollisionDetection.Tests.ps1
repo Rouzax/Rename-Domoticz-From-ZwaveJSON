@@ -50,11 +50,39 @@ BeforeAll {
     #             endpoint; that stale device is absent from this export but
     #             still owns the clean name, so the live endpoint-0 device can
     #             only be renamed with an endpoint suffix.
-    #   node 9  - a Central Scene remote. Domoticz keys its three key states as
-    #             ONE DeviceID with three Unit rows, and the user has named each
-    #             one differently. A single Z-Wave value cannot supply three
-    #             names, and every write matches on DeviceID alone, so renaming
-    #             would collapse all three and the undo could not restore them.
+    #   node 9  - a Central Scene remote whose value carries NO states array.
+    #             Domoticz keys its three key states as ONE DeviceID with three
+    #             Unit rows, and the user has named each one differently. With
+    #             nothing to say which unit means what, renaming would collapse
+    #             all three, so the device must be left alone.
+    #   node 10 - a Central Scene remote whose value DOES carry a states array,
+    #             stored as three identically named rows. Each unit takes its
+    #             own name from its state text.
+    #   node 11 - the same, but with three differently named rows. Used by the
+    #             undo-recovery tests: each row must get its own name, and the
+    #             undo script must put each original name back on its own row.
+    #   node 12 - a Central Scene remote with THREE rows but only TWO states.
+    #             The mapping cannot be established, so the fallback applies.
+    #   node 13 - three rows and three states, but one state's `value` is null.
+    #             It would cast to 0 and map unit 0 to the wrong state text.
+    #   node 14 - three rows and three states whose `value` is a non-numeric
+    #             string. Casting it to int throws, and under
+    #             $ErrorActionPreference = 'Stop' that would abort the run.
+    #   node 15 - three rows that SHARE one name, where unit 0's computed name
+    #             equals that name. Units 1 and 2 move away; the shared name is
+    #             still held by unit 0 and must stay unavailable.
+    #   node 16 - a device on another endpoint that wants exactly the name node
+    #             15's unit 0 keeps. It must be disambiguated, not silently
+    #             allowed to duplicate that name.
+    #   node 17 - three rows and three states, but one state's `text` is null.
+    #             Casting it to [string] would silently succeed as "", mapping
+    #             a unit to a blank label and leaving its device name ending
+    #             in a bare " - " instead of falling back.
+    #   node 18 - three rows and three states, but one state's `text` is a
+    #             single space (whitespace-only, not empty). IsNullOrEmpty
+    #             would let it through, since only the base name is
+    #             whitespace-normalized and not this suffix, leaving a
+    #             device name with a stray trailing space.
     $script:NodesJson = @'
 [
   {
@@ -89,6 +117,107 @@ BeforeAll {
     "values": [
       { "id": "9-91-0-scene-001", "label": "Scene 001" }
     ]
+  },
+  {
+    "id": 10, "loc": "Zone Foxtrot", "name": "Remote", "productLabel": "TESTREM2",
+    "values": [
+      { "id": "10-91-0-scene-001", "label": "Scene 001",
+        "states": [
+          { "value": 0, "text": "KeyPressed" },
+          { "value": 1, "text": "KeyReleased" },
+          { "value": 2, "text": "KeyHeldDown" }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 11, "loc": "Zone Golf", "name": "Remote", "productLabel": "TESTREM3",
+    "values": [
+      { "id": "11-91-0-scene-002", "label": "Scene 002",
+        "states": [
+          { "value": 0, "text": "KeyPressed" },
+          { "value": 1, "text": "KeyReleased" },
+          { "value": 2, "text": "KeyHeldDown" }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 12, "loc": "Zone Hotel", "name": "Remote", "productLabel": "TESTREM4",
+    "values": [
+      { "id": "12-91-0-scene-003", "label": "Scene 003",
+        "states": [
+          { "value": 0, "text": "KeyPressed" },
+          { "value": 1, "text": "KeyReleased" }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 13, "loc": "Zone India", "name": "Remote", "productLabel": "TESTREM5",
+    "values": [
+      { "id": "13-91-0-scene-004", "label": "Scene 004",
+        "states": [
+          { "value": null, "text": "KeyHeldDown" },
+          { "value": 1, "text": "KeyReleased" },
+          { "value": 2, "text": "KeyPressed" }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 14, "loc": "Zone Juliet", "name": "Remote", "productLabel": "TESTREM6",
+    "values": [
+      { "id": "14-91-0-scene-005", "label": "Scene 005",
+        "states": [
+          { "value": "zero", "text": "KeyPressed" },
+          { "value": "one", "text": "KeyReleased" },
+          { "value": "two", "text": "KeyHeldDown" }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 15, "loc": "Zone Kilo", "name": "Remote", "productLabel": "TESTREM7",
+    "values": [
+      { "id": "15-91-0-scene-006", "label": "Scene 006",
+        "states": [
+          { "value": 0, "text": "KeyPressed" },
+          { "value": 1, "text": "KeyReleased" },
+          { "value": 2, "text": "KeyHeldDown" }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 16, "loc": "Zone Kilo", "name": "Remote", "productLabel": "TESTSENS",
+    "values": [
+      { "id": "16-49-1-Custom", "label": "Scene 006 - Short" }
+    ]
+  },
+  {
+    "id": 17, "loc": "Zone Lima", "name": "Remote", "productLabel": "TESTREM9",
+    "values": [
+      { "id": "17-91-0-scene-007", "label": "Scene 007",
+        "states": [
+          { "value": 0, "text": "KeyPressed" },
+          { "value": 1, "text": null },
+          { "value": 2, "text": "KeyHeldDown" }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 18, "loc": "Zone Mike", "name": "Remote", "productLabel": "TESTREM10",
+    "values": [
+      { "id": "18-91-0-scene-008", "label": "Scene 008",
+        "states": [
+          { "value": 0, "text": "KeyPressed" },
+          { "value": 1, "text": " " },
+          { "value": 2, "text": "KeyHeldDown" }
+        ]
+      }
+    ]
   }
 ]
 '@
@@ -101,6 +230,9 @@ BeforeAll {
     { "name": "CC48 Motion",    "pattern": "48-\\d+-Motion$",                                "replace": " - Sensor state \\(Motion\\)$", "with": " - Motion",      "description": "forces a collision with the unchanged CC113 device" },
     { "name": "Switch EP",      "pattern": "37-\\d+-currentValue$",                          "replace": " - Current value$",             "with": "",               "description": "both endpoints reduce to the same base name" },
     { "name": "CC48 Any",       "pattern": "48-\\d+-Any$",                                   "replace": " - Sensor state \\(Any\\)$",    "with": " - Motion (Binary)", "description": "unique rename, no collision" },
+    { "name": "Scene KeyPressed",  "pattern": "91-\\d+-scene-\\d+$",     "replace": " - KeyPressed$",                "with": " - Short",       "description": "mirrors the bundled Central Scene rules" },
+    { "name": "Scene KeyReleased", "pattern": "91-\\d+-scene-\\d+$",     "replace": " - KeyReleased$",               "with": " - Released",    "description": "shares a pattern with the rule above; only the replace differs" },
+    { "name": "Scene KeyHeldDown", "pattern": "91-\\d+-scene-\\d+$",     "replace": " - KeyHeldDown$",               "with": " - Held",        "description": "shares a pattern with the rules above" },
     { "name": "Scene",          "pattern": "91-\\d+-scene-\\d+$",                          "replace": " - Scene 001$",                 "with": " - Scene 1",     "description": "would collapse three differently named Domoticz rows into one" },
     { "name": "Electric Watts", "pattern": "50-\\d+-value-66049$",                           "replace": " - Electric Consumption \\[W\\]$", "with": " [W]",         "description": "collides with a stale device Domoticz kept from another endpoint" }
   ]
@@ -119,6 +251,15 @@ BeforeAll {
         'test_8-50-0-value-66049'                         = 'Zone Delta-Lamp (Zone Delta - Lamp - Electric Consumption [W])'  # live, badly named
         'test_8-50-1-value-66049'                         = 'Zone Delta - Lamp [W]'                      # stale, holds the clean name
         'test_9-91-0-scene-001'                           = 'Zone Echo - Remote - Scene 1 Pressed'       # one of three disagreeing rows
+        'test_10-91-0-scene-001'                          = 'Zone Foxtrot - Remote - Scene 001'          # three units, all identically named
+        'test_11-91-0-scene-002'                          = 'Zone Golf - Remote - Tap'                   # three units, each named differently
+        'test_12-91-0-scene-003'                          = 'Zone Hotel - Remote - Push'                 # three units, two states: unmappable
+        'test_13-91-0-scene-004'                          = 'Zone India - Remote - A'                    # three units, one state value is null
+        'test_14-91-0-scene-005'                          = 'Zone Juliet - Remote - A'                   # three units, state values are not numbers
+        'test_15-91-0-scene-006'                          = 'Zone Kilo - Remote - Scene 006 - Short'     # three units sharing one name; unit 0 keeps it
+        'test_16-49-1-Custom'                             = 'Zone Kilo - Remote - Old Y'                 # wants the name unit 0 of node 15 keeps
+        'test_17-91-0-scene-007'                          = 'Zone Lima - Remote - A'                     # three units, one state text is null
+        'test_18-91-0-scene-008'                          = 'Zone Mike - Remote - A'                     # three units, one state text is whitespace-only
     }
 
     # Additional DeviceStatus rows that share a DeviceID with an entry above but
@@ -127,6 +268,22 @@ BeforeAll {
     $script:ExtraRows = @(
         @{ DeviceID = 'test_9-91-0-scene-001'; Name = 'Zone Echo - Remote - Scene 1 Held';     Unit = 1 }
         @{ DeviceID = 'test_9-91-0-scene-001'; Name = 'Zone Echo - Remote - Scene 1 Released'; Unit = 2 }
+        @{ DeviceID = 'test_10-91-0-scene-001'; Name = 'Zone Foxtrot - Remote - Scene 001'; Unit = 1 }
+        @{ DeviceID = 'test_10-91-0-scene-001'; Name = 'Zone Foxtrot - Remote - Scene 001'; Unit = 2 }
+        @{ DeviceID = 'test_11-91-0-scene-002'; Name = 'Zone Golf - Remote - Let go';        Unit = 1 }
+        @{ DeviceID = 'test_11-91-0-scene-002'; Name = 'Zone Golf - Remote - Long hold';     Unit = 2 }
+        @{ DeviceID = 'test_12-91-0-scene-003'; Name = 'Zone Hotel - Remote - Let go';       Unit = 1 }
+        @{ DeviceID = 'test_12-91-0-scene-003'; Name = 'Zone Hotel - Remote - Hold';         Unit = 2 }
+        @{ DeviceID = 'test_13-91-0-scene-004'; Name = 'Zone India - Remote - B';            Unit = 1 }
+        @{ DeviceID = 'test_13-91-0-scene-004'; Name = 'Zone India - Remote - C';            Unit = 2 }
+        @{ DeviceID = 'test_14-91-0-scene-005'; Name = 'Zone Juliet - Remote - B';           Unit = 1 }
+        @{ DeviceID = 'test_14-91-0-scene-005'; Name = 'Zone Juliet - Remote - C';           Unit = 2 }
+        @{ DeviceID = 'test_15-91-0-scene-006'; Name = 'Zone Kilo - Remote - Scene 006 - Short'; Unit = 1 }
+        @{ DeviceID = 'test_15-91-0-scene-006'; Name = 'Zone Kilo - Remote - Scene 006 - Short'; Unit = 2 }
+        @{ DeviceID = 'test_17-91-0-scene-007'; Name = 'Zone Lima - Remote - B';             Unit = 1 }
+        @{ DeviceID = 'test_17-91-0-scene-007'; Name = 'Zone Lima - Remote - C';             Unit = 2 }
+        @{ DeviceID = 'test_18-91-0-scene-008'; Name = 'Zone Mike - Remote - B';             Unit = 1 }
+        @{ DeviceID = 'test_18-91-0-scene-008'; Name = 'Zone Mike - Remote - C';             Unit = 2 }
     )
 
     # Domoticz device Type per DeviceID (82 = Temp+Humidity). Others default to 0.
@@ -160,6 +317,19 @@ BeforeAll {
             }
         }
         finally { $conn.Close() }
+    }
+
+    function Get-UnitNameList {
+        param(
+            [Parameter(Mandatory)][string]$Path,
+            [Parameter(Mandatory)][string]$DeviceID
+        )
+        $conn = Open-SqliteDatabase -Path $Path
+        try {
+            $rows = Invoke-SqliteReader -Connection $conn -Sql 'SELECT Name FROM DeviceStatus WHERE DeviceID = @id ORDER BY Unit' -Parameters @{ id = $DeviceID }
+        }
+        finally { $conn.Close() }
+        return @($rows | ForEach-Object { [string]$_.Name })
     }
 
     function Get-DeviceNameMap {
@@ -283,6 +453,130 @@ Describe 'Collision detection against the end state' -Skip:(-not $EngineAvailabl
         $names[2] | Should -Be 'Zone Echo - Remote - Scene 1 Released'
     }
 
+    It 'shows the unit number in the HTML report for a multi-unit device row' {
+        $report = Get-ChildItem -LiteralPath $script:WorkDir -Filter 'rename_report-*.html' | Select-Object -First 1
+        $html = Get-Content -LiteralPath $report.FullName -Raw
+
+        $html | Should -Match 'test_10-91-0-scene-001 \(unit 0\)'
+        $html | Should -Match 'test_10-91-0-scene-001 \(unit 1\)'
+        $html | Should -Match 'test_10-91-0-scene-001 \(unit 2\)'
+    }
+
+    It 'does not show a unit number for a single-row device' {
+        # test_7 has one Domoticz row, so its device-id must render exactly as
+        # before: no "(unit N)" suffix.
+        $report = Get-ChildItem -LiteralPath $script:WorkDir -Filter 'rename_report-*.html' | Select-Object -First 1
+        $html = Get-Content -LiteralPath $report.FullName -Raw
+
+        $html | Should -Not -Match 'test_7-48-0-Any \(unit'
+    }
+
+    It 'gives each unit of a Central Scene device its own name' {
+        $conn = Open-SqliteDatabase -Path $script:DbPath
+        try {
+            $rows = Invoke-SqliteReader -Connection $conn -Sql "SELECT Unit, Name FROM DeviceStatus WHERE DeviceID = 'test_10-91-0-scene-001' ORDER BY Unit"
+        }
+        finally { $conn.Close() }
+
+        $names = @($rows | ForEach-Object { [string]$_.Name })
+        $names[0] | Should -Be 'Zone Foxtrot - Remote - Scene 001 - Short'
+        $names[1] | Should -Be 'Zone Foxtrot - Remote - Scene 001 - Released'
+        $names[2] | Should -Be 'Zone Foxtrot - Remote - Scene 001 - Held'
+    }
+
+    It 'falls back to skipping when the row count does not match the state count' {
+        # test_12 has three rows but its value declares only two states, so the
+        # mapping cannot be established and the v2.11 guard must still apply.
+        # (test_9 covers the other fallback: a value with no states array at all.)
+        $conn = Open-SqliteDatabase -Path $script:DbPath
+        try {
+            $rows = Invoke-SqliteReader -Connection $conn -Sql "SELECT Name FROM DeviceStatus WHERE DeviceID = 'test_12-91-0-scene-003' ORDER BY Unit"
+        }
+        finally { $conn.Close() }
+
+        $names = @($rows | ForEach-Object { [string]$_.Name })
+        $names[0] | Should -Be 'Zone Hotel - Remote - Push'
+        $names[1] | Should -Be 'Zone Hotel - Remote - Let go'
+        $names[2] | Should -Be 'Zone Hotel - Remote - Hold'
+    }
+
+    It 'falls back to skipping when a state value is not a whole number' {
+        # A null state value passes a bare property check and casts to 0, which
+        # would map unit 0 to the wrong state text; a non-numeric one throws on
+        # the cast and, with $ErrorActionPreference = 'Stop', would abort the
+        # entire run. Both are doubt, so both must fall back to the skip.
+        $conn = Open-SqliteDatabase -Path $script:DbPath
+        try {
+            $nullValued = Invoke-SqliteReader -Connection $conn -Sql "SELECT Name FROM DeviceStatus WHERE DeviceID = 'test_13-91-0-scene-004' ORDER BY Unit"
+            $textValued = Invoke-SqliteReader -Connection $conn -Sql "SELECT Name FROM DeviceStatus WHERE DeviceID = 'test_14-91-0-scene-005' ORDER BY Unit"
+        }
+        finally { $conn.Close() }
+
+        @($nullValued | ForEach-Object { [string]$_.Name }) | Should -Be @(
+            'Zone India - Remote - A', 'Zone India - Remote - B', 'Zone India - Remote - C')
+        @($textValued | ForEach-Object { [string]$_.Name }) | Should -Be @(
+            'Zone Juliet - Remote - A', 'Zone Juliet - Remote - B', 'Zone Juliet - Remote - C')
+    }
+
+    It 'falls back to skipping when a state text is null or empty' {
+        # A null state text passes the property check (the property exists, its
+        # value is $null) and casts to "" via [string], which would map a unit
+        # to a blank label and leave its device name ending in a bare " - ".
+        $conn = Open-SqliteDatabase -Path $script:DbPath
+        try {
+            $rows = Invoke-SqliteReader -Connection $conn -Sql "SELECT Name FROM DeviceStatus WHERE DeviceID = 'test_17-91-0-scene-007' ORDER BY Unit"
+        }
+        finally { $conn.Close() }
+
+        @($rows | ForEach-Object { [string]$_.Name }) | Should -Be @(
+            'Zone Lima - Remote - A', 'Zone Lima - Remote - B', 'Zone Lima - Remote - C')
+    }
+
+    It 'falls back to skipping when a state text is whitespace-only' {
+        # A single-space state text is not null or empty, so IsNullOrEmpty would
+        # let it through and IsNullOrWhiteSpace is required to catch it. Only
+        # the base name is whitespace-normalized, not this suffix, so letting
+        # it through would write a name ending in a bare " - " (the label
+        # collapses to nothing visible) rather than falling back to the skip.
+        $conn = Open-SqliteDatabase -Path $script:DbPath
+        try {
+            $rows = Invoke-SqliteReader -Connection $conn -Sql "SELECT Name FROM DeviceStatus WHERE DeviceID = 'test_18-91-0-scene-008' ORDER BY Unit"
+        }
+        finally { $conn.Close() }
+
+        $names = @($rows | ForEach-Object { [string]$_.Name })
+        @($names) | Should -Be @(
+            'Zone Mike - Remote - A', 'Zone Mike - Remote - B', 'Zone Mike - Remote - C')
+        $names | Where-Object { $_ -match ' - $' } | Should -BeNullOrEmpty
+    }
+
+    It 'completes the run instead of aborting on an unusable state value' {
+        # The fallback is only a fallback if the run survives it.
+        $script:Output | Should -Match 'Summary'
+        $script:Output | Should -Not -Match 'Cannot convert'
+    }
+
+    It 'keeps a name that another unit of the same device still holds' {
+        # Three rows share one name and unit 0's computed name equals it, so
+        # unit 0 keeps it while units 1 and 2 move away. Freeing the shared name
+        # when unit 1 moved would let another device claim a name unit 0 still
+        # holds, which is the duplicate collision detection exists to prevent.
+        $conn = Open-SqliteDatabase -Path $script:DbPath
+        try {
+            $rows = Invoke-SqliteReader -Connection $conn -Sql "SELECT Name FROM DeviceStatus WHERE DeviceID = 'test_15-91-0-scene-006' ORDER BY Unit"
+        }
+        finally { $conn.Close() }
+
+        $names = @($rows | ForEach-Object { [string]$_.Name })
+        $names[0] | Should -Be 'Zone Kilo - Remote - Scene 006 - Short'
+        $names[1] | Should -Be 'Zone Kilo - Remote - Scene 006 - Released'
+        $names[2] | Should -Be 'Zone Kilo - Remote - Scene 006 - Held'
+
+        # The device that wanted that name sits on another endpoint, so it is
+        # disambiguated rather than being allowed to duplicate the name.
+        $script:Names['test_16-49-1-Custom'] | Should -Be 'Zone Kilo - Remote - Scene 006 - Short - EP1'
+    }
+
     It 'tells the user why the ambiguous device was skipped' {
         $script:Output | Should -Match 'skipped'
         $script:Output | Should -Match 'test_9-91-0-scene-001'
@@ -310,5 +604,89 @@ Describe 'Collision detection against the end state' -Skip:(-not $EngineAvailabl
             Where-Object { $_.Count -gt 1 } |
             ForEach-Object { $_.Name }
         $duplicates | Should -BeNullOrEmpty
+    }
+
+    It 'writes an undo statement per unit, carrying that unit own old name' {
+        $undo = Get-ChildItem -LiteralPath $script:WorkDir -Filter 'undo_rename-*.sql' | Select-Object -First 1
+        $undo | Should -Not -BeNullOrEmpty
+        $sql = Get-Content -LiteralPath $undo.FullName -Raw
+
+        # Every generated UPDATE must scope to a single row. A statement matching
+        # on DeviceID alone would rewrite every unit of a multi-unit device.
+        $updates = [regex]::Matches($sql, 'UPDATE DeviceStatus SET .*?;')
+        $updates.Count | Should -BeGreaterThan 0
+        foreach ($u in $updates) {
+            $u.Value | Should -Match 'AND Unit = \d+;$'
+        }
+    }
+}
+
+Describe 'Undo restores every unit its own name' -Skip:(-not $EngineAvailable) {
+    # Regression test for the data loss fixed in v2.11 and made structurally
+    # impossible in v2.12: a device whose rows were named individually used to
+    # be renamed through a DeviceID-only UPDATE, and the generated undo script
+    # matched on DeviceID alone too, so running it overwrote all three rows with
+    # whichever single name had been captured. The documented recovery path
+    # destroyed the evidence.
+    #
+    # This runs against its own fixture database so the restored names cannot
+    # disturb the end-state assertions in the Describe above.
+    BeforeAll {
+        $script:UndoWorkDir = Join-Path ([System.IO.Path]::GetTempPath()) ("renamer-undo-test-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $script:UndoWorkDir -Force | Out-Null
+
+        $script:UndoDbPath = Join-Path $script:UndoWorkDir 'db.db'
+        $json  = Join-Path $script:UndoWorkDir 'nodes.json'
+        $rules = Join-Path $script:UndoWorkDir 'rules.json'
+
+        Set-Content -LiteralPath $json  -Value $script:NodesJson -Encoding utf8
+        Set-Content -LiteralPath $rules -Value $script:RulesJson -Encoding utf8
+        New-TestDatabase -Path $script:UndoDbPath
+
+        $null = & pwsh -NoProfile -File $script:ScriptPath -JsonFile $json -DbPath $script:UndoDbPath -RulesFile $rules -Force -NoBackup 2>&1
+
+        # The three rows of test_11 start out named differently and are renamed
+        # per unit, which is exactly the case a DeviceID-only undo cannot undo.
+        $script:RenamedNames = @(Get-UnitNameList -Path $script:UndoDbPath -DeviceID 'test_11-91-0-scene-002')
+
+        $undoFile = Get-ChildItem -LiteralPath $script:UndoWorkDir -Filter 'undo_rename-*.sql' | Select-Object -First 1
+        $script:UndoSql = if ($undoFile) { Get-Content -LiteralPath $undoFile.FullName -Raw } else { $null }
+        if ($script:UndoSql) {
+            $conn = Open-SqliteDatabase -Path $script:UndoDbPath
+            try {
+                foreach ($line in ($script:UndoSql -split "`r?`n")) {
+                    $stmt = $line.Trim()
+                    if ($stmt -eq '' -or $stmt.StartsWith('--')) { continue }
+                    [void](Invoke-SqliteNonQuery -Connection $conn -Sql $stmt)
+                }
+            }
+            finally { $conn.Close() }
+        }
+        $script:RestoredNames = @(Get-UnitNameList -Path $script:UndoDbPath -DeviceID 'test_11-91-0-scene-002')
+    }
+
+    AfterAll {
+        if ($script:UndoWorkDir -and (Test-Path -LiteralPath $script:UndoWorkDir)) {
+            Remove-Item -LiteralPath $script:UndoWorkDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'renamed all three differently named rows to their own state names first' {
+        # Without this the recovery assertion below would pass vacuously against
+        # a run that never touched the device.
+        $script:RenamedNames[0] | Should -Be 'Zone Golf - Remote - Scene 002 - Short'
+        $script:RenamedNames[1] | Should -Be 'Zone Golf - Remote - Scene 002 - Released'
+        $script:RenamedNames[2] | Should -Be 'Zone Golf - Remote - Scene 002 - Held'
+    }
+
+    It 'puts every original name back on its own unit' {
+        # A DeviceID-only undo would leave all three rows holding one name.
+        $script:RestoredNames[0] | Should -Be 'Zone Golf - Remote - Tap'
+        $script:RestoredNames[1] | Should -Be 'Zone Golf - Remote - Let go'
+        $script:RestoredNames[2] | Should -Be 'Zone Golf - Remote - Long hold'
+    }
+
+    It 'restores three distinct names, not three copies of one' {
+        @($script:RestoredNames | Sort-Object -Unique).Count | Should -Be 3
     }
 }

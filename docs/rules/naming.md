@@ -96,6 +96,47 @@ untouched, exclude them by pattern, since their DeviceID always ends in
 See [Excluding devices from a run](../using/running.md#excluding-devices)
 for the other ways to exclude devices.
 
+## Multi-unit devices
+
+Domoticz stores some Z-Wave values, most commonly a Central Scene button, as
+several `Unit` rows sharing one DeviceID: one row per key state (a short
+press, a release, a held-down state) rather than one row per Z-Wave value.
+The script names each row individually, from the value's own `states` array,
+rather than giving every row the same name.
+
+The bundled rules translate the raw Z-Wave state text to a shorter label:
+
+| Raw state text | Bundled label |
+|-----------------|----------------|
+| `KeyPressed`    | `Short`        |
+| `KeyReleased`   | `Released`     |
+| `KeyHeldDown`   | `Held`         |
+
+If those words do not match how you use the button, change the `with` value
+of the matching rule; nothing else needs to change. For example, if you
+trigger long-press automations off `KeyReleased` rather than `KeyHeldDown`,
+you may prefer `Long` over `Released`:
+
+```json
+{
+  "name": "Central Scene KeyReleased",
+  "pattern": "91-\\d+-scene-\\d+$",
+  "replace": " - KeyReleased$",
+  "with": " - Long"
+}
+```
+
+Copy `rename_rules.json`, make that one edit, and pass the copy with
+`-RulesFile`; see [Writing your own rules](writing-rules.md) for the full
+rule format.
+
+This mapping only applies when it can be established beyond doubt: the
+number of Domoticz rows must equal the number of states the Z-Wave value
+reports, and every row's `Unit` number must match a state value. See
+[Devices the tool refuses to touch](../using/running.md#devices-the-tool-refuses-to-touch)
+for what happens when it cannot, and for what changes for anyone upgrading
+from an older version.
+
 ## The `$` prefix is preserved
 
 If a device's current name in Domoticz already starts with `$`, the

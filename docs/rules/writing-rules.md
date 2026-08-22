@@ -66,9 +66,14 @@ Use `\\[` and `\\]` to escape literal brackets inside a `pattern` or
 
 ## How matching works
 
-1. Rules are tried in file order. The **first rule whose `pattern`
-   matches wins**; no later rule is consulted for that device, even if it
-   would also match.
+1. Rules are tried in file order. The **first rule that actually does
+   something wins**: the first whose `pattern` matches the DeviceID and
+   that either changes the name or carries a `switchType` or
+   `customImage`. No later rule is consulted for that device, even if it
+   would also match. A rule whose `pattern` matches but that changes
+   nothing is skipped over, so several rules may share one `pattern` and
+   differ only in what they `replace` (the bundled Central Scene rules do
+   exactly this, because one DeviceID covers several key states).
 2. `pattern` is tested against the **DeviceID**, not the name. See
    [How the DeviceID is built](naming.md#how-the-deviceid-is-built) for
    what that string looks like, including the endpoint number it
@@ -77,8 +82,10 @@ Use `\\[` and `\\]` to escape literal brackets inside a `pattern` or
 3. If `pattern` matches, `replace` is tested against the **device name**
    built from `Room - Device - Label`, and the matched portion is
    substituted with `with`. If `replace` does not match anything in the
-   name, the rule still counts as matched (its `switchType`/`customImage`
-   still apply); the name is just unchanged by this step.
+   name, the rule still counts as matched **if** it carries a
+   `switchType` or `customImage` (those still apply, and the name is left
+   unchanged). If it carries neither, the rule had no effect at all and
+   the next rule is tried.
 4. `nodeMatch`, when present, is an object of regexes checked against the
    node's `productLabel`, `productDescription`, and `manufacturer`. Every
    key you include must match for the rule to apply; a rule with no
