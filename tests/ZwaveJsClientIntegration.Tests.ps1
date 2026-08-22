@@ -274,6 +274,21 @@ Describe 'Get-ZwaveJsToken (integration)' -Skip:(-not $CanListen) {
         $sent.password | Should -Be 'hunter2'
     }
 
+    It 'does not also warn about -ZwaveJsToken when the token came from a credential' {
+        # The credential path sets the token internally. Warning about
+        # -ZwaveJsToken here would point the reader at a parameter they never
+        # passed, on top of the sharper password warning login already emitted.
+        $warnings = @()
+        try {
+            Get-ZwaveJsNodes -Url 'http://localhost:1' -Credential (New-TestCredential) -TimeoutSec 2 -WarningVariable +warnings -WarningAction SilentlyContinue | Out-Null
+        }
+        catch {
+            # Port 1 refuses; only the warnings emitted before that matter here.
+            Write-Debug "Expected connection failure: $($_.Exception.Message)"
+        }
+        ($warnings -join ' ') | Should -Not -Match 'ZwaveJsToken'
+    }
+
     It 'throws a clear error when the server rejects the credential' {
         $server = Start-FakeAuth -Succeed $false
         try {

@@ -273,8 +273,10 @@ function Get-ZwaveJsNodes {
     if ($Credential -and $Token) {
         throw "Supply either a credential or a token, not both."
     }
+    $tokenCameFromCredential = $false
     if ($Credential) {
         $Token = Get-ZwaveJsToken -Url $Url -Credential $Credential -SkipCertificateCheck:$SkipCertificateCheck -TimeoutSec $TimeoutSec
+        $tokenCameFromCredential = $true
     }
 
     $u = try { [Uri]$Url } catch { throw "Invalid zwave-js-ui URL: $Url" }
@@ -287,10 +289,14 @@ function Get-ZwaveJsNodes {
     # The token is a credential. Over http it travels in cleartext, which is
     # usually fine on a trusted LAN (the common case) but risky on an open
     # network, so warn rather than refuse.
-    if ($Token -and $wsScheme -eq 'ws') {
+    # Only warn about the token when the caller actually supplied one. A token
+    # obtained from -ZwaveJsCredential has already produced a sharper warning
+    # during login, and naming -ZwaveJsToken here would point the reader at a
+    # parameter they never used.
+    if ($Token -and -not $tokenCameFromCredential -and $wsScheme -eq 'ws') {
         Write-Warning "Sending -ZwaveJsToken to $Url over http: the token is transmitted in cleartext. Fine on a trusted LAN; use https:// if the traffic could be observed."
     }
-    if ($Token -and $SkipCertificateCheck) {
+    if ($Token -and -not $tokenCameFromCredential -and $SkipCertificateCheck) {
         Write-Warning "-SkipCertificateCheck disables TLS validation; a token sent to an unverified server can be intercepted."
     }
 
