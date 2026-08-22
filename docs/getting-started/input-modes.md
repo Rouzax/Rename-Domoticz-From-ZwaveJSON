@@ -32,26 +32,48 @@ names before and after a Z-Wave JS UI configuration change).
     device identifier from the discovery payload.
 
     **Authentication.** If your instance requires login, pass
-    `-ZwaveJsToken` with a JWT obtained by logging into zwave-js-ui. The
-    script never logs or stores the token. Prefer setting it from an
-    environment variable rather than typing it inline, so it does not end up
-    in your shell history or process list:
+    `-ZwaveJsCredential`, and the script logs in for you:
+
+    ```powershell
+    .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "https://zwave-host:8091" -ZwaveJsCredential (Get-Credential) -DbPath "domoticz.db" -DryRun
+    ```
+
+    `Get-Credential` prompts for the username and password without either
+    appearing in your shell history or in the process list. The script exchanges
+    them for a session token itself, so you never obtain, paste or store a token,
+    and token expiry stops mattering because each run logs in fresh.
+
+    For an unattended run, save the credential once and read it back:
+
+    ```powershell
+    Get-Credential | Export-CliXml ./zwave.cred      # once, interactively
+    .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "https://zwave-host:8091" -ZwaveJsCredential (Import-CliXml ./zwave.cred) -DbPath "domoticz.db"
+    ```
+
+    `Export-CliXml` encrypts the password so only the same user on the same
+    machine can read it back. Keep the file out of version control.
+
+    **If you already have a token**, `-ZwaveJsToken` still works and is
+    unchanged. Supplying both a credential and a token is an error rather than a
+    silent preference. Prefer setting a token from an environment variable
+    rather than typing it inline:
 
     ```powershell
     .\Rename-Domoticz-From-ZwaveJSON.ps1 -ZwaveJsUrl "http://zwave-host:8091" -ZwaveJsToken $env:ZWAVEJS_TOKEN -DbPath "domoticz.db" -DryRun
     ```
 
-    The token is a credential. If you connect over `http://` (not `https://`)
-    and supply `-ZwaveJsToken`, the script sends the token in cleartext. It
-    allows this and prints a warning rather than refusing to run, because a
-    trusted LAN or localhost connection is a common and reasonable case; use
-    `https://` instead if the traffic could be observed by anyone else.
+    Either way the secret is a credential. Over `http://` rather than `https://`
+    it travels in cleartext, and the script warns rather than refusing, because a
+    trusted LAN or localhost is a common and reasonable case. The warning is
+    sharper for a password than for a token: a captured token expires, a captured
+    password works until you change it. Use `https://` if the traffic could be
+    observed.
 
     **Self-signed HTTPS.** If zwave-js-ui uses a certificate your machine
     does not trust, add `-SkipCertificateCheck` to skip TLS validation.
-    Avoid combining it with `-ZwaveJsToken`: an unverified server could
-    intercept the token. The script warns when you combine the two. Prefer
-    a trusted certificate over skipping validation when you can.
+    Avoid combining it with `-ZwaveJsCredential` or `-ZwaveJsToken`: an
+    unverified server could intercept whichever you send. The script warns when
+    you combine them. Prefer a trusted certificate over skipping validation.
 
 === "JSON export"
 

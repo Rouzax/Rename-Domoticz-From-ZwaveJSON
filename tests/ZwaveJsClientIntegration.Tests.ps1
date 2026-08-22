@@ -156,7 +156,158 @@ Describe 'Get-ZwaveJsNodes (integration)' -Skip:(-not $CanListen) {
         try {
             Get-ZwaveJsNodes -Url 'http://localhost:1' -Token 'jwt' -TimeoutSec 2 -WarningVariable +warnings -WarningAction SilentlyContinue | Out-Null
         }
-        catch { }  # connect fails on port 1; we only care that the token/http warning fired first
+        catch {
+            # Port 1 refuses the connection. The warning fires before the socket
+            # is opened, so the failure is expected and not what is under test.
+            Write-Debug "Expected connection failure: $($_.Exception.Message)"
+        }
+        ($warnings -join ' ') | Should -Match 'cleartext'
+    }
+}
+
+<#
+    Login tests for Get-ZwaveJsToken.
+
+    zwave-js-ui authenticates over plain HTTP (POST /api/authenticate) and only
+    then carries the resulting JWT into the socket handshake, so these use a
+    simple HttpListener rather than the hand-rolled WebSocket harness above.
+    HttpListener's plain-HTTP support is cross-platform; only its WebSocket
+    upgrade is Windows-only, which is why the socket tests avoid it.
+#>
+Describe 'Get-ZwaveJsToken (integration)' -Skip:(-not $CanListen) {
+
+    BeforeAll {
+        function Start-FakeAuth {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Test helper starting an in-process listener.')]
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseUsingScopeModifierInNewRunspaces', '', Justification = 'Variables are passed via -ArgumentList/param, not captured.')]
+            param([bool]$Succeed = $true)
+
+            foreach ($attempt in 1..10) {
+                $port = Get-Random -Minimum 44100 -Maximum 45900
+                $job = Start-ThreadJob -ScriptBlock {
+                    param($port, $succeed)
+                    $listener = [System.Net.HttpListener]::new()
+                    $listener.Prefixes.Add("http://localhost:$port/")
+                    try { $listener.Start() } catch { return "BIND_FAILED" }
+                    try {
+                        # Time-bounded: if the call under test never reaches us
+                        # (it threw first, or the port was wrong), the job must
+                        # still end. A ThreadJob blocked in GetContext cannot be
+                        # force-removed and hangs the whole suite.
+                        $task = $listener.GetContextAsync()
+                        if (-not $task.Wait(8000)) { return @{ Path = ''; Method = ''; Body = '' } }
+                        $ctx = $task.Result
+                        $reader = [System.IO.StreamReader]::new($ctx.Request.InputStream)
+                        $body = $reader.ReadToEnd()
+                        $reader.Dispose()
+
+                        $payload = if ($succeed) {
+                            '{"success":true,"user":{"username":"someone","token":"jwt-from-server"}}'
+                        }
+                        else {
+                            '{"success":false,"message":"Wrong username or password"}'
+                        }
+                        $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+                        $ctx.Response.StatusCode = 200
+                        $ctx.Response.ContentType = 'application/json'
+                        $ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+                        $ctx.Response.OutputStream.Close()
+
+                        # Hand the request back so the test can assert on what was sent.
+                        return @{ Path = $ctx.Request.Url.AbsolutePath; Method = $ctx.Request.HttpMethod; Body = $body }
+                    }
+                    finally { $listener.Stop(); $listener.Dispose() }
+                } -ArgumentList $port, $Succeed
+
+                Start-Sleep -Milliseconds 250
+                if ($job.State -eq 'Completed' -and (Receive-Job $job) -eq 'BIND_FAILED') {
+                    Remove-Job $job -Force; continue
+                }
+                return [pscustomobject]@{ Port = $port; Job = $job }
+            }
+            throw 'Could not bind a loopback port for the fake auth server'
+        }
+
+        function Stop-FakeAuth {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Test helper stopping an in-process listener; nothing to confirm.')]
+            param($Server)
+            if (-not $Server) { return }
+            $null = Wait-Job $Server.Job -Timeout 5
+            $script:LastRequest = Receive-Job $Server.Job -ErrorAction SilentlyContinue
+            Remove-Job $Server.Job -Force -ErrorAction SilentlyContinue
+        }
+
+        function New-TestCredential {
+            # These warnings are correct in general and deliberately accepted here:
+            # the "credential" is a throwaway string sent to an in-process fake
+            # server on loopback, and one test must assert the exact password the
+            # client transmits, which requires knowing it in plaintext.
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Test helper building an in-memory object; nothing to confirm.')]
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '', Justification = 'Throwaway loopback test credential, never a real secret.')]
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingUsernameAndPasswordParams', '', Justification = 'Test helper constructing a PSCredential; taking one would defeat its purpose.')]
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', '', Justification = 'A test must know the plaintext to assert what the client transmits.')]
+            param([string]$User = 'someone', [string]$Password = 'not-a-real-password')
+            [pscredential]::new($User, (ConvertTo-SecureString $Password -AsPlainText -Force))
+        }
+    }
+
+    It 'exchanges a credential for the token the server returns' {
+        $server = Start-FakeAuth -Succeed $true
+        try {
+            $token = Get-ZwaveJsToken -Url "http://localhost:$($server.Port)" -Credential (New-TestCredential) -TimeoutSec 10
+            $token | Should -Be 'jwt-from-server'
+        }
+        finally { Stop-FakeAuth $server }
+    }
+
+    It 'posts the credential to /api/authenticate as username and password' {
+        $server = Start-FakeAuth -Succeed $true
+        try {
+            $null = Get-ZwaveJsToken -Url "http://localhost:$($server.Port)" -Credential (New-TestCredential -User 'alice' -Password 'hunter2') -TimeoutSec 10
+        }
+        finally { Stop-FakeAuth $server }
+
+        $script:LastRequest.Method | Should -Be 'POST'
+        $script:LastRequest.Path | Should -Be '/api/authenticate'
+        $sent = $script:LastRequest.Body | ConvertFrom-Json
+        $sent.username | Should -Be 'alice'
+        $sent.password | Should -Be 'hunter2'
+    }
+
+    It 'does not also warn about -ZwaveJsToken when the token came from a credential' {
+        # The credential path sets the token internally. Warning about
+        # -ZwaveJsToken here would point the reader at a parameter they never
+        # passed, on top of the sharper password warning login already emitted.
+        $warnings = @()
+        try {
+            Get-ZwaveJsNodes -Url 'http://localhost:1' -Credential (New-TestCredential) -TimeoutSec 2 -WarningVariable +warnings -WarningAction SilentlyContinue | Out-Null
+        }
+        catch {
+            # Port 1 refuses; only the warnings emitted before that matter here.
+            Write-Debug "Expected connection failure: $($_.Exception.Message)"
+        }
+        ($warnings -join ' ') | Should -Not -Match 'ZwaveJsToken'
+    }
+
+    It 'throws a clear error when the server rejects the credential' {
+        $server = Start-FakeAuth -Succeed $false
+        try {
+            { Get-ZwaveJsToken -Url "http://localhost:$($server.Port)" -Credential (New-TestCredential) -TimeoutSec 10 } |
+                Should -Throw '*rejected*'
+        }
+        finally { Stop-FakeAuth $server }
+    }
+
+    It 'warns when a password would travel over http in cleartext' {
+        $warnings = @()
+        try {
+            Get-ZwaveJsToken -Url 'http://localhost:1' -Credential (New-TestCredential) -TimeoutSec 2 -WarningVariable +warnings -WarningAction SilentlyContinue | Out-Null
+        }
+        catch {
+            # Port 1 refuses the connection. The warning fires before the request
+            # is attempted, so the failure is expected and not what is under test.
+            Write-Debug "Expected connection failure: $($_.Exception.Message)"
+        }
         ($warnings -join ' ') | Should -Match 'cleartext'
     }
 }
