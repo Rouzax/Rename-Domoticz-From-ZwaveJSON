@@ -138,6 +138,51 @@ is above zero, and in the HTML report under **Skipped: ambiguous devices**. If
 you want them renamed, rename them in Domoticz, or check that your zwave-js-ui
 export includes the value's `states` array.
 
+## Devices with no Z-Wave value behind them
+
+The tool builds its list of candidates from the values the node source reports.
+A Domoticz device whose DeviceID matches none of them is never a candidate, so
+it is never renamed. That is deliberate: nothing updates such a device any
+more, and giving it a tidy name would only make a dead row look healthy.
+
+It is reported rather than passed over in silence, because otherwise a device
+that was never considered looks exactly like one the tool failed to rename:
+
+```text
+  !  2 Domoticz device(s) have no Z-Wave value behind them
+     Nothing in the node source matches their DeviceID, so they were never considered.
+       - zwavejs2mqtt_0xc15d8aa6_80-50-1-value-66048 (Used=0, last update 2026-09-02 15:27:35)
+         'Woonkamer-Screen Links (Woonkamer - Screen Links - Electric [W])'
+         zwave-js-ui still advertises a discovery entry for it, so Domoticz will keep
+         re-creating it. Clear that entry in zwave-js-ui first, then delete the device.
+```
+
+Only devices carrying this Z-Wave installation's base identifier are counted.
+Your Domoticz database holds devices from every hardware type it talks to, and
+none of the others are this tool's concern.
+
+Two causes are told apart, because the fix differs:
+
+- **The discovery entry outlived its Z-Wave value.** zwave-js-ui still
+  advertises a Home Assistant discovery entry for the DeviceID while the value
+  behind it is gone, most often because the node was re-interviewed and its
+  values came back on a different endpoint. Domoticz creates its devices from
+  those discovery entries, so deleting the device alone will not stick: it
+  reappears the next time zwave-js-ui republishes. Clear the stale discovery
+  entry in zwave-js-ui first, then delete the device in Domoticz.
+- **Not in the node source at all.** Neither a value nor a discovery entry
+  carries the DeviceID any more. Nothing will bring it back, so it can simply
+  be deleted in Domoticz (Setup, Devices) once you are satisfied the physical
+  device is gone.
+
+These appear in the summary as `Orphaned`, shown only when the count is above
+zero, and in the HTML report under **Not in the node source**, which lists every
+one of them with its current name, `Used` flag, and last update time. The debug
+log records each as an `ORPHANED:` line.
+
+Nothing is deleted for you. The tool only ever renames devices, and reporting
+these does not change that.
+
 ## Automation
 
 For unattended use, pass `-Force` to skip every interactive prompt the

@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.14] - 2026-09-02
+
+**Reports Domoticz devices that have no Z-Wave value behind them.** Renaming candidates come from the values the node source reports, so a Domoticz device whose DeviceID matches none of them was never considered. That has always been the right call (nothing updates such a device any more, and a tidy name would only make a dead row look healthy), but it happened in complete silence: a device that was never a candidate looked exactly like one the tool had failed to rename, with nothing in the console, the log, or the report to tell the two apart. The `Missing` statistic counts the opposite direction, a Z-Wave value with no Domoticz device, and never covered this.
+
+Such devices are now counted as `Orphaned` in the summary (shown only when the count is above zero), listed in the HTML report under **Not in the node source** with each one's current name, `Used` flag and last update time, and recorded in the debug log as `ORPHANED:` lines. Only devices carrying the Z-Wave installation's own base identifier are considered; a Domoticz database holds devices from every hardware type it talks to, and none of the others are this tool's business.
+
+Two causes are told apart, because the fix differs. When zwave-js-ui still advertises a Home Assistant discovery entry for the DeviceID while the Z-Wave value behind it is gone, most often after a node was re-interviewed and its values came back on a different endpoint, Domoticz keeps being told to create the device: deleting it alone will not stick, and the discovery entry has to be cleared in zwave-js-ui first. When neither a value nor a discovery entry carries the DeviceID any more, nothing will revive it and it can simply be deleted in Domoticz.
+
+Nothing is deleted for you, and no device that was renamed before is renamed differently now. This release only adds reporting.
+
+Docs: [Devices with no Z-Wave value behind them](docs/using/running.md), the HTML report section list, and a troubleshooting row for the symptom that prompted this (a device that plainly needed renaming, and no explanation of why it was skipped).
+
 ## [2.13.1] - 2026-08-22
 
 **New `-ZwaveJsUser`: log in by username and be prompted for the password.** Authenticating meant `-ZwaveJsCredential (Get-Credential)`, which assumed you were already inside a PowerShell session. Launching the script from a POSIX shell as `pwsh ./Rename-Domoticz-From-ZwaveJSON.ps1 ...`, the common case on a Raspberry Pi, meant bash or zsh parsed the command line first and died on the parentheses before PowerShell ever saw them. `-ZwaveJsUser admin` is a plain string, so it reaches PowerShell untouched. The password is prompted for and never appears in the shell history, the process list, the log, or the HTML report.

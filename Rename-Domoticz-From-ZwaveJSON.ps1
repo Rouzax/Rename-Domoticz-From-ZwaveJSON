@@ -144,7 +144,7 @@
 
 .NOTES
     Author:  Rouzax
-    Version: 2.13.1
+    Version: 2.14
     Requires: PowerShell 7.0+ and the SQLite assemblies from setup.ps1 (./lib)
     Encoding: Save as UTF-8 (no BOM) if you prefer that style.
 #>
@@ -223,7 +223,7 @@ $ErrorActionPreference = 'Stop'
 # carried the number literally before, and drifted apart the moment one was
 # updated without the other. The .NOTES block in the help above is a comment,
 # so it cannot read this and still has to be changed by hand.
-$Script:Version = '2.13.1'
+$Script:Version = '2.14'
 #endregion
 
 #region Exit Codes
@@ -258,6 +258,13 @@ $Script:AmbiguousDevices = [System.Collections.Generic.List[PSCustomObject]]::ne
 # dropped from the rename. This list is report-only.
 $Script:ResolvedCollisions = [System.Collections.Generic.List[PSCustomObject]]::new()
 
+# Domoticz devices under this Z-Wave base identifier that the node source knows
+# nothing about. Rename candidates all come from node.values, so a DeviceStatus
+# row keyed on anything else is never visited. Leaving it alone is right (a
+# rename would only make a dead row look healthy), but staying silent about it
+# made a missing rename indistinguishable from a bug in this tool. Report-only.
+$Script:OrphanedDevices = [System.Collections.Generic.List[PSCustomObject]]::new()
+
 # Statistics tracking
 $Script:Stats = @{
     Renamed      = 0
@@ -269,6 +276,7 @@ $Script:Stats = @{
     Excluded     = 0
     Collisions   = 0
     Ambiguous    = 0
+    Orphaned     = 0
 }
 
 # Timing for ETA calculation
@@ -893,6 +901,9 @@ function New-HtmlReport {
         [System.Collections.Generic.List[PSCustomObject]]$AmbiguousDevices,
 
         [Parameter()]
+        [System.Collections.Generic.List[PSCustomObject]]$OrphanedDevices,
+
+        [Parameter()]
         [string]$BackupPath,
 
         [Parameter()]
@@ -1172,6 +1183,43 @@ $nameRows
         <p class="section-note">One DeviceID, several Domoticz rows, different values. The tool cannot give them different names (a single Z-Wave value yields a single label), so it leaves them alone rather than collapsing them.</p>
         <div class="collision-list">
             $ambiguousItems
+        </div>
+"@
+    }
+
+    # Build orphaned-device section. These were never candidates: no Z-Wave
+    # value in the node source carries their DeviceID. The two causes are told
+    # apart because the fix differs - a device zwave-js-ui still advertises will
+    # come straight back if you only delete it in Domoticz.
+    $orphanSection = ""
+    if ($OrphanedDevices -and $OrphanedDevices.Count -gt 0) {
+        $orphanItems = ""
+        foreach ($orphan in $OrphanedDevices) {
+            $orphanHint = if ($orphan.InDiscovery) {
+                "zwave-js-ui still advertises a Home Assistant discovery entry for this DeviceID while the Z-Wave value behind it is gone, which is how Domoticz came to hold it. Deleting the device alone will not stick: clear the discovery entry in zwave-js-ui first, then delete the device in Domoticz (Setup &rarr; Devices)."
+            }
+            else {
+                "Neither a Z-Wave value nor a discovery entry carries this DeviceID any more. Nothing will revive it, so delete it in Domoticz (Setup &rarr; Devices) if the device is genuinely gone."
+            }
+            $orphanOrigin = if ($orphan.InDiscovery) { "Discovery entry outlived its Z-Wave value" } else { "Not in the node source at all" }
+            $orphanItems += @"
+            <div class="collision-item resolved">
+                <div class="collision-name">$([System.Web.HttpUtility]::HtmlEncode($orphan.DeviceID))</div>
+                <div class="collision-resolution">$orphanOrigin</div>
+                <div class="blame-row">
+                    <span class="blame-status stale">Used=$($orphan.Used) &middot; last update $([System.Web.HttpUtility]::HtmlEncode($orphan.LastUpdate))</span>
+                    <span class="blame-current">$([System.Web.HttpUtility]::HtmlEncode($orphan.Name))</span>
+                </div>
+                <div class="collision-hint">$orphanHint</div>
+            </div>
+"@
+        }
+
+        $orphanSection = @"
+        <h2>🔍 Not in the node source <span class="count">($($OrphanedDevices.Count) devices)</span></h2>
+        <p class="section-note">These Domoticz devices carry this Z-Wave base identifier, but no value in the node source matches their DeviceID. They were never renaming candidates. Renaming one would only put a tidy name on a row nothing updates any more, so they are reported instead.</p>
+        <div class="collision-list">
+            $orphanItems
         </div>
 "@
     }
@@ -1708,6 +1756,8 @@ $hint
 
         $ambiguousSection
 
+        $orphanSection
+
         <h2>📝 Updated Devices <span class="count">($entryCount entries)</span></h2>
         
         <div class="toolbar">
@@ -2147,6 +2197,61 @@ foreach ($d in $ZwaveData) {
     }
 }
 
+# Everything the node source can account for, beyond the values themselves.
+#
+# $nodeLevelIds covers EVERY node, not just the ones carrying values: the loop
+# above skips a valueless node (a controller, say) entirely, and its node-level
+# Domoticz device would otherwise look unaccounted for.
+#
+# $discoveryDeviceIds holds the unique_id of every Home Assistant discovery
+# entry the source advertises. Domoticz builds its devices from those entries,
+# not from node.values, and the two drift apart: after a node is re-interviewed
+# its values can come back on a different endpoint while the discovery entries
+# still name the old ones. A device in this set but not in $sourceDeviceIds is
+# one Domoticz keeps being told to create for a value that no longer exists.
+$nodeLevelIds = [System.Collections.Generic.HashSet[string]]::new()
+$discoveryDeviceIds = [System.Collections.Generic.HashSet[string]]::new()
+foreach ($d in $ZwaveData) {
+    if ($d.PSObject.Properties['id']) {
+        [void]$nodeLevelIds.Add((("${BaseIdentifier}_node$([string]$d.id)" -replace " ", "_") -replace "/", "-"))
+    }
+    if (-not $d.PSObject.Properties['hassDevices'] -or $null -eq $d.hassDevices) { continue }
+    foreach ($hassProp in $d.hassDevices.PSObject.Properties) {
+        $hass = $hassProp.Value
+        if ($null -eq $hass -or -not $hass.PSObject.Properties['discovery_payload']) { continue }
+        $payload = $hass.discovery_payload
+        if ($null -eq $payload -or -not $payload.PSObject.Properties['unique_id']) { continue }
+        $uniqueId = [string]$payload.unique_id
+        if ([string]::IsNullOrWhiteSpace($uniqueId)) { continue }
+        [void]$discoveryDeviceIds.Add((($uniqueId -replace " ", "_") -replace "/", "-"))
+    }
+}
+
+# Scoped to this Z-Wave base identifier on purpose: a Domoticz database holds
+# devices from every hardware type it talks to, and none of the others are this
+# tool's business. Sorted so the report reads the same way on every run.
+$orphanPrefix = "${BaseIdentifier}_"
+foreach ($existingId in ($allDevices.Keys | Sort-Object)) {
+    if (-not ([string]$existingId).StartsWith($orphanPrefix, [StringComparison]::Ordinal)) { continue }
+    if ($sourceDeviceIds.Contains($existingId) -or $nodeLevelIds.Contains($existingId)) { continue }
+    $orphanRow = $allDevices[$existingId]
+    $Script:OrphanedDevices.Add([PSCustomObject]@{
+        DeviceID    = [string]$existingId
+        Name        = [string]$orphanRow.Name
+        Used        = [int]$orphanRow.Used
+        LastUpdate  = [string]$orphanRow.LastUpdate
+        InDiscovery = $discoveryDeviceIds.Contains($existingId)
+    })
+}
+$Script:Stats.Orphaned = $Script:OrphanedDevices.Count
+if ($Script:Stats.Orphaned -gt 0) {
+    Write-Log "$($Script:Stats.Orphaned) Domoticz device(s) under '$BaseIdentifier' have no matching Z-Wave value and were not considered for renaming" -Level INFO
+    foreach ($orphan in $Script:OrphanedDevices) {
+        $origin = if ($orphan.InDiscovery) { 'still advertised by a discovery entry' } else { 'not in the node source at all' }
+        Write-Log "ORPHANED: $($orphan.DeviceID) | '$($orphan.Name)' | $origin | Used=$($orphan.Used) | LastUpdate=$($orphan.LastUpdate)" -Level DEBUG
+    }
+}
+
 # Track proposed names for collision detection.
 #
 # Seed with the current name of every existing device so a rename that would
@@ -2525,6 +2630,26 @@ if ($Script:AmbiguousDevices.Count -gt 0) {
     Write-Host ""
 }
 
+if ($Script:OrphanedDevices.Count -gt 0) {
+    Write-Host "  ⚠️  $($Script:OrphanedDevices.Count) Domoticz device(s) have no Z-Wave value behind them" -ForegroundColor Yellow
+    Write-Host "     Nothing in the node source matches their DeviceID, so they were never considered." -ForegroundColor Gray
+    foreach ($orphan in $Script:OrphanedDevices | Select-Object -First 5) {
+        Write-Host "       - $($orphan.DeviceID) (Used=$($orphan.Used), last update $($orphan.LastUpdate))" -ForegroundColor Yellow
+        Write-Host "         '$($orphan.Name)'" -ForegroundColor Gray
+        if ($orphan.InDiscovery) {
+            Write-Host "         zwave-js-ui still advertises a discovery entry for it, so Domoticz will keep" -ForegroundColor Gray
+            Write-Host "         re-creating it. Clear that entry in zwave-js-ui first, then delete the device." -ForegroundColor Gray
+        }
+        else {
+            Write-Host "         Not in the node source at all. Safe to delete in Domoticz if the device is gone." -ForegroundColor Gray
+        }
+    }
+    if ($Script:OrphanedDevices.Count -gt 5) {
+        Write-Host "       ... and $($Script:OrphanedDevices.Count - 5) more (see the HTML report)" -ForegroundColor Gray
+    }
+    Write-Host ""
+}
+
 $autoResolved = $Script:ResolvedCollisions.Count
 if ($autoResolved -gt 0) {
     Write-Host "  ✓ $autoResolved name collision(s) auto-resolved with endpoint numbers" -ForegroundColor Green
@@ -2848,7 +2973,7 @@ $HtmlTempFallback = Join-Path $TempDir ("rename_report-{0}.html" -f $Timestamp)
 
 $finalHtmlPath = Write-SafeFile -PrimaryPath $HtmlPrimary -FallbackDbPath $HtmlDbFallback -FallbackTempPath $HtmlTempFallback -Description "HTML report" -Writer {
     param([string]$Path)
-    New-HtmlReport -OutputPath $Path -Stats $Script:Stats -RenameList $Script:RenameList -Collisions $Script:NameCollisions -ResolvedCollisions $Script:ResolvedCollisions -AmbiguousDevices $Script:AmbiguousDevices -BackupPath $BackupPath -WasDryRun $DryRun
+    New-HtmlReport -OutputPath $Path -Stats $Script:Stats -RenameList $Script:RenameList -Collisions $Script:NameCollisions -ResolvedCollisions $Script:ResolvedCollisions -AmbiguousDevices $Script:AmbiguousDevices -OrphanedDevices $Script:OrphanedDevices -BackupPath $BackupPath -WasDryRun $DryRun
 }
 
 $Script:Stopwatch.Stop()
@@ -2866,8 +2991,12 @@ $summaryContent = [ordered]@{
     Errors       = $Script:Stats.Errors
 }
 
-# Only surfaced when it has something to say, so the usual run's summary box is
-# byte-identical to previous versions.
+# Only surfaced when they have something to say, so the usual run's summary box
+# is byte-identical to previous versions. Inserted at the same index in reverse
+# order, which leaves them reading Ambiguous then Orphaned when both are shown.
+if ($Script:Stats.Orphaned -gt 0) {
+    $summaryContent.Insert(5, 'Orphaned', $Script:Stats.Orphaned)
+}
 if ($Script:Stats.Ambiguous -gt 0) {
     $summaryContent.Insert(5, 'Ambiguous', $Script:Stats.Ambiguous)
 }

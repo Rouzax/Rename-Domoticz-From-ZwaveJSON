@@ -62,6 +62,11 @@ section explaining every automatic collision resolution. See
 [Name collisions](collisions.md) for what that section shows and how to
 read it.
 
+A **Not in the node source** section appears whenever the run found Domoticz
+devices whose DeviceID matches no Z-Wave value, listing every one of them
+rather than the first five the console shows. See
+[Devices with no Z-Wave value behind them](running.md#devices-with-no-z-wave-value-behind-them).
+
 ## Log file
 
 **Always written**, in the database folder by default, as
