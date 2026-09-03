@@ -144,7 +144,7 @@
 
 .NOTES
     Author:  Rouzax
-    Version: 2.14
+    Version: 2.14.1
     Requires: PowerShell 7.0+ and the SQLite assemblies from setup.ps1 (./lib)
     Encoding: Save as UTF-8 (no BOM) if you prefer that style.
 #>
@@ -223,7 +223,7 @@ $ErrorActionPreference = 'Stop'
 # carried the number literally before, and drifted apart the moment one was
 # updated without the other. The .NOTES block in the help above is a comment,
 # so it cannot read this and still has to be changed by hand.
-$Script:Version = '2.14'
+$Script:Version = '2.14.1'
 #endregion
 
 #region Exit Codes
@@ -1193,13 +1193,19 @@ $nameRows
     # come straight back if you only delete it in Domoticz.
     $orphanSection = ""
     if ($OrphanedDevices -and $OrphanedDevices.Count -gt 0) {
+        # Deleting is not the only option, and rarely the best one. Where the
+        # device has a live successor, Domoticz's own Replace transfers the new
+        # device onto the old row, which keeps the old idx (so automations that
+        # reference it by idx keep working), the old name, and the logged
+        # history. Same hint on both causes: either can have a successor.
+        $orphanReplaceHint = " If a device for the value's new location already exists, use Domoticz's <strong>Replace</strong> button on that new device instead of deleting this one: the old row survives with its idx, name and history, and takes over the live DeviceID. Only devices of the same Type and SubType are offered."
         $orphanItems = ""
         foreach ($orphan in $OrphanedDevices) {
             $orphanHint = if ($orphan.InDiscovery) {
-                "zwave-js-ui still advertises a Home Assistant discovery entry for this DeviceID while the Z-Wave value behind it is gone, which is how Domoticz came to hold it. Deleting the device alone will not stick: clear the discovery entry in zwave-js-ui first, then delete the device in Domoticz (Setup &rarr; Devices)."
+                "zwave-js-ui still advertises a Home Assistant discovery entry for this DeviceID while the Z-Wave value behind it is gone, which is how Domoticz came to hold it. Deleting the device alone will not stick: clear the discovery entry in zwave-js-ui first, then deal with the device in Domoticz.$orphanReplaceHint"
             }
             else {
-                "Neither a Z-Wave value nor a discovery entry carries this DeviceID any more. Nothing will revive it, so delete it in Domoticz (Setup &rarr; Devices) if the device is genuinely gone."
+                "Neither a Z-Wave value nor a discovery entry carries this DeviceID any more. Nothing will revive it, so it can be deleted in Domoticz (Setup &rarr; Devices) once the device is genuinely gone.$orphanReplaceHint"
             }
             $orphanOrigin = if ($orphan.InDiscovery) { "Discovery entry outlived its Z-Wave value" } else { "Not in the node source at all" }
             $orphanItems += @"

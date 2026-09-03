@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.14.1] - 2026-09-03
+
+**Points at Domoticz's Replace instead of only at deleting.** v2.14 told you to delete an orphaned device. That is right only when nothing succeeds it. When the device does have a live successor, most often because a value moved to another endpoint and Domoticz created a second device for it, deleting throws away the logged history and leaves the survivor with a new `idx` that every automation referring to the old one will miss.
+
+Domoticz can transfer one device onto another instead, from the **Replace** button on the device edit dialog of the Switches, Utilities, Temperature and Weather tabs. The old row survives with its `idx`, its name and its history, and takes over the new device's `HardwareID`, `OrgHardwareID`, `DeviceID`, `Unit`, `Type`, `SubType` and `Options`; log rows of the new device newer than the old device's last update are moved onto the old `idx` across the Rain, Temperature, UV, Wind, Meter, MultiMeter, Fan and Percentage tables and their `_Calendar` counterparts; the new row is then deleted. Only devices of the same `Type` and `SubType` are offered, so a kWh counter cannot be replaced by a Watt usage device even on the same node.
+
+The HTML report's orphan entries now say so, on both causes, since either can have a successor. Docs gain [Keep the history and the idx: replace instead of delete](docs/using/running.md), and the troubleshooting row for `Orphaned` points at it.
+
+No behaviour change beyond that report wording: the tool still only renames, and never replaces or deletes anything itself.
+
 ## [2.14] - 2026-09-02
 
 **Reports Domoticz devices that have no Z-Wave value behind them.** Renaming candidates come from the values the node source reports, so a Domoticz device whose DeviceID matches none of them was never considered. That has always been the right call (nothing updates such a device any more, and a tidy name would only make a dead row look healthy), but it happened in complete silence: a device that was never a candidate looked exactly like one the tool had failed to rename, with nothing in the console, the log, or the report to tell the two apart. The `Missing` statistic counts the opposite direction, a Z-Wave value with no Domoticz device, and never covered this.

@@ -183,6 +183,55 @@ log records each as an `ORPHANED:` line.
 Nothing is deleted for you. The tool only ever renames devices, and reporting
 these does not change that.
 
+### Keep the history and the idx: replace instead of delete
+
+When the old device has a live successor, most often because a value moved to
+another endpoint and Domoticz created a second device for it, deleting the old
+one throws away its logged history, and the new device carries a new `idx` that
+every automation referring to the old one will miss.
+
+Domoticz can transfer one device onto another instead. Open the **new** device's
+edit dialog and press **Replace**, then pick the old device from the list. The
+button is on the device edit dialog of the Switches, Utilities, Temperature and
+Weather tabs.
+
+What Domoticz actually does, read from the source rather than from the UI
+wording:
+
+- The **old** row survives, keeping its `idx` **and its name**. It takes over the
+  new device's `HardwareID`, `OrgHardwareID`, `DeviceID`, `Unit`, `Type`,
+  `SubType` and `Options`.
+- Log rows belonging to the new device that are **newer than the old device's
+  last update** are moved onto the old `idx`, across the Rain, Temperature, UV,
+  Wind, Meter, MultiMeter, Fan and Percentage tables and their `_Calendar`
+  counterparts. Anything dated at or before that point stays with the new device.
+- The **new** device row is then deleted.
+
+So the surviving device keeps its identity and its graphs and starts receiving
+data through the live DeviceID. Anything that looks the device up by `idx`, a
+dzVents script or a scene, keeps working untouched.
+
+Two constraints are worth knowing before you try:
+
+- Only devices with the **same `Type` and `SubType`** are offered. A kWh counter
+  cannot be replaced by a Watt usage device, even on the same node. The
+  exceptions are Temp, Temp+Hum and Temp+Hum+Baro, which are interchangeable
+  with one another, Rain with Rain, and a VOC air-quality sensor, which may also
+  be replaced by a Custom sensor.
+- The list holds **every matching device in the database**, sorted by name and
+  not narrowed to the same node, hardware or room. On a large installation that
+  can run to hundreds of entries, so know the old device's name before you open
+  it.
+
+For an orphan whose discovery entry outlived its Z-Wave value, the full sequence
+is: clear the stale discovery entry in zwave-js-ui, let Domoticz create the
+device for the value's new location, replace that new device onto the old one,
+then re-run this tool. The surviving row still carries the old name, so the
+rename you were expecting happens on that run.
+
+Replacing is a Domoticz operation. This tool never performs it, and the undo
+script from a run cannot reverse it, so take a database backup first.
+
 ## Automation
 
 For unattended use, pass `-Force` to skip every interactive prompt the
