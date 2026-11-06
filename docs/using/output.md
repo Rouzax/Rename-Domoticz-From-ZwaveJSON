@@ -67,6 +67,11 @@ devices whose DeviceID matches no Z-Wave value, listing every one of them
 rather than the first five the console shows. See
 [Devices with no Z-Wave value behind them](running.md#devices-with-no-z-wave-value-behind-them).
 
+A **Duplicate names** section appears whenever a name will still be held by
+more than one device after the run, listing every one rather than the first
+five the console shows, with each device's `Used` flag and last update. See
+[Names that are already shared](collisions.md#names-that-are-already-shared).
+
 ## Log file
 
 **Always written**, in the database folder by default, as

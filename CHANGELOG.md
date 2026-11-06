@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.15] - 2026-11-06
+
+**Reports names that more than one device still holds.** Collision detection only looks at a name that is changing, so two devices already holding the name their rules propose both counted as unchanged, and the summary said `Collisions: 0` with a duplicate in the database. The usual cause is one Z-Wave device exposing the same thing through two command classes: a Forest Shuttle offers Binary Switch and Multilevel Switch, both labelled `Current value`, and the rules strip that label from both.
+
+Such names are now counted as `Duplicates` in the summary (shown only when the count is above zero), listed on the console and in the HTML report under **Duplicate names** with each device's `Used` flag and last update, and recorded in the log as `DUPLICATE:` lines. The check reads the end state of the run, so a duplicate the run resolves is not listed. A name counts when two different DeviceIDs hold it and at least one is a Z-Wave device, so the rows of one multi-unit device are not listed, and neither is a duplicate between other hardware.
+
+Nothing is renamed or skipped because of this, and exit codes are unchanged.
+
+`rename_rules.json` gains a rule giving a Forest Shuttle's Binary Switch entity the suffix ` - Schakelaar`, so it no longer takes the curtain's name. The built-in default rules are unchanged.
+
+Docs: [Names that are already shared](docs/using/collisions.md#names-that-are-already-shared), the HTML report section list, and a troubleshooting row.
+
 ## [2.14.1] - 2026-09-03
 
 **Points at Domoticz's Replace instead of only at deleting.** v2.14 told you to delete an orphaned device. That is right only when nothing succeeds it. When the device does have a live successor, most often because a value moved to another endpoint and Domoticz created a second device for it, deleting throws away the logged history and leaves the survivor with a new `idx` that every automation referring to the old one will miss.

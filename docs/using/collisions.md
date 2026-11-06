@@ -116,3 +116,39 @@ An unresolvable collision means both devices keep their previous names for
 this run. Fix the underlying cause (usually a stale device that also lacks
 a usable endpoint, or a genuine naming clash from a renaming rule) and
 run again.
+
+## Names that are already shared
+
+Collision detection only runs on a name that is changing. When two devices
+already hold the name their rules propose, both count as unchanged and the
+summary shows `Collisions: 0`. The script reports them separately instead,
+as `Duplicates`, and changes nothing about them.
+
+The usual cause is one Z-Wave device exposing the same thing through two
+command classes. A curtain motor can offer both Binary Switch (`37`) and
+Multilevel Switch (`38`), each labelled `Current value`, and the default
+rules strip that label from both. An older run or a manual rename can
+leave them on the same name this way.
+
+```
+  ⚠️  1 name(s) are held by more than one device
+     Left as they are. A lookup by name can reach the wrong device; use the idx.
+       - 'Living Room - Curtain'
+         → zwavejs2mqtt_0xc15d8aa6_49-37-0-currentValue (Used=0, last update 2026-08-17 06:36:28)
+         → zwavejs2mqtt_0xc15d8aa6_49-38-0-currentValue (Used=1, last update 2026-11-06 07:30:01)
+     Give one a distinct name with a renaming rule, or delete the one you do not need.
+```
+
+The check looks at the names as they will be when the run finishes, so a
+duplicate the run itself resolves is not listed. A name counts as shared
+when two different DeviceIDs hold it and at least one is a Z-Wave device, so
+a Z-Wave device sharing its name with another hardware type is listed. The
+rows of one multi-unit device sharing a name are not, and neither is a
+duplicate between devices of other hardware. Exit codes do not change: a run
+that finds only duplicates still exits with `2` (no changes needed).
+
+To fix one, pick the device you do not need; `Used` and the last update
+usually make that clear. Either give it a distinct name with a
+[`nodeMatch`](../rules/writing-rules.md) rule placed above the generic rule,
+or delete it in Domoticz. If zwave-js-ui still advertises its discovery
+entry, clear that entry first, or Domoticz can re-create the device.
