@@ -144,7 +144,7 @@
 
 .NOTES
     Author:  Rouzax
-    Version: 2.14.1
+    Version: 2.15
     Requires: PowerShell 7.0+ and the SQLite assemblies from setup.ps1 (./lib)
     Encoding: Save as UTF-8 (no BOM) if you prefer that style.
 #>
@@ -223,7 +223,7 @@ $ErrorActionPreference = 'Stop'
 # carried the number literally before, and drifted apart the moment one was
 # updated without the other. The .NOTES block in the help above is a comment,
 # so it cannot read this and still has to be changed by hand.
-$Script:Version = '2.14.1'
+$Script:Version = '2.15'
 #endregion
 
 #region Exit Codes
@@ -265,6 +265,13 @@ $Script:ResolvedCollisions = [System.Collections.Generic.List[PSCustomObject]]::
 # made a missing rename indistinguishable from a bug in this tool. Report-only.
 $Script:OrphanedDevices = [System.Collections.Generic.List[PSCustomObject]]::new()
 
+# Names held by more than one device once this run has finished. Collision
+# detection only looks at a name that is changing, so devices already sharing
+# the name their rules propose are all "unchanged" and never reach it. Separate
+# from $Script:NameCollisions because that list drives the skip filter, and
+# nothing here is skipped. Report-only.
+$Script:DuplicateNames = [System.Collections.Generic.List[PSCustomObject]]::new()
+
 # Statistics tracking
 $Script:Stats = @{
     Renamed      = 0
@@ -277,6 +284,7 @@ $Script:Stats = @{
     Collisions   = 0
     Ambiguous    = 0
     Orphaned     = 0
+    Duplicates   = 0
 }
 
 # Timing for ETA calculation
@@ -689,6 +697,67 @@ function Get-CollisionBlame {
     }
 }
 
+function Get-DuplicateDeviceName {
+    <#
+    .SYNOPSIS
+        Finds names that more than one device will hold when this run finishes.
+    .DESCRIPTION
+        Works from the end state, so a duplicate this run resolves is not
+        reported and one it leaves behind is, whichever list its devices were on.
+
+        Devices are told apart by DeviceID: several rows of one multi-unit device
+        sharing a name is how Domoticz stores it, not a duplicate.
+
+        A group needs at least one device under the base identifier. A name
+        shared with another hardware type still makes the Z-Wave device ambiguous,
+        but a duplicate with no Z-Wave device in it is not this tool's business.
+    .OUTPUTS
+        PSCustomObject with Name and DeviceIDs, sorted by name.
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param (
+        [Parameter(Mandatory)]
+        [hashtable]$RowsById,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.List[PSCustomObject]]$RenameList,
+
+        [Parameter(Mandatory)]
+        [string]$BaseIdentifier
+    )
+
+    $renamedRows = @{}
+    foreach ($item in $RenameList) {
+        if (-not $item.NameChanged -or $null -eq $item.NewName) { continue }
+        foreach ($unit in $item.Units) {
+            $renamedRows["$($item.DeviceID)|$unit"] = [string]$item.NewName
+        }
+    }
+
+    $holders = @{}
+    foreach ($deviceId in $RowsById.Keys) {
+        foreach ($row in $RowsById[$deviceId]) {
+            $rowKey = "$deviceId|$($row.Unit)"
+            $finalName = if ($renamedRows.ContainsKey($rowKey)) { $renamedRows[$rowKey] } else { [string]$row.Name }
+            $finalNorm = ($finalName -replace '\s{2,}', ' ').Trim()
+            if (-not $holders.ContainsKey($finalNorm)) {
+                $holders[$finalNorm] = [System.Collections.Generic.SortedSet[string]]::new([StringComparer]::Ordinal)
+            }
+            [void]$holders[$finalNorm].Add([string]$deviceId)
+        }
+    }
+
+    $prefix = "${BaseIdentifier}_"
+    foreach ($name in ($holders.Keys | Sort-Object)) {
+        $deviceIds = @($holders[$name])
+        if ($deviceIds.Count -lt 2) { continue }
+        if (-not ($deviceIds | Where-Object { $_.StartsWith($prefix, [StringComparison]::Ordinal) })) { continue }
+        [PSCustomObject]@{ Name = $name; DeviceIDs = $deviceIds }
+    }
+}
+
 function Get-UnitStateMap {
     <#
     .SYNOPSIS
@@ -902,6 +971,9 @@ function New-HtmlReport {
 
         [Parameter()]
         [System.Collections.Generic.List[PSCustomObject]]$OrphanedDevices,
+
+        [Parameter()]
+        [System.Collections.Generic.List[PSCustomObject]]$DuplicateNames,
 
         [Parameter()]
         [string]$BackupPath,
@@ -1226,6 +1298,42 @@ $nameRows
         <p class="section-note">These Domoticz devices carry this Z-Wave base identifier, but no value in the node source matches their DeviceID. They were never renaming candidates. Renaming one would only put a tidy name on a row nothing updates any more, so they are reported instead.</p>
         <div class="collision-list">
             $orphanItems
+        </div>
+"@
+    }
+
+    # Used and LastUpdate are shown for every device here, not only the stale
+    # ones as in a blame row, because they are how the redundant device of a
+    # live pair gets picked out.
+    $duplicateSection = ""
+    if ($DuplicateNames -and $DuplicateNames.Count -gt 0) {
+        $duplicateItems = ""
+        foreach ($duplicate in $DuplicateNames) {
+            $duplicateRows = ""
+            foreach ($holder in $duplicate.Devices) {
+                $holderClass = if ($holder.InSource) { "live" } else { "stale" }
+                $holderSource = if ($holder.InSource) { "in node source" } else { "not in node source" }
+                $duplicateRows += @"
+                <div class="blame-row">
+                    <code>$([System.Web.HttpUtility]::HtmlEncode($holder.DeviceID))</code>
+                    <span class="blame-status $holderClass">$holderSource &middot; Used=$($holder.Used) &middot; last update $([System.Web.HttpUtility]::HtmlEncode($holder.LastUpdate))</span>
+                </div>
+"@
+            }
+            $duplicateItems += @"
+            <div class="collision-item">
+                <div class="collision-name">$([System.Web.HttpUtility]::HtmlEncode($duplicate.Name))</div>
+                <div class="collision-resolution">Held by $($duplicate.Devices.Count) devices, left as they are</div>
+$duplicateRows
+            </div>
+"@
+        }
+
+        $duplicateSection = @"
+        <h2>👯 Duplicate names <span class="count">($($DuplicateNames.Count) names)</span></h2>
+        <p class="section-note">These names are held by more than one device after this run. The tool did not change them. A lookup by name can reach the wrong device, so anything referring to these devices should use the idx. Give one device a distinct name with a renaming rule, or delete the one you do not need.</p>
+        <div class="collision-list">
+            $duplicateItems
         </div>
 "@
     }
@@ -1763,6 +1871,7 @@ $hint
         $ambiguousSection
 
         $orphanSection
+        $duplicateSection
 
         <h2>📝 Updated Devices <span class="count">($entryCount entries)</span></h2>
         
@@ -2737,6 +2846,33 @@ foreach ($item in $Script:RenameList) {
 }
 $Script:RenameList = $filteredList
 
+# Read from the filtered list, so a device skipped by a collision counts under
+# the name it keeps.
+foreach ($group in @(Get-DuplicateDeviceName -RowsById $rowsById -RenameList $Script:RenameList -BaseIdentifier $BaseIdentifier)) {
+    $Script:DuplicateNames.Add([PSCustomObject]@{
+        Name    = $group.Name
+        Devices = @($group.DeviceIDs | ForEach-Object { Get-CollisionBlame -DeviceID $_ -AllDevices $allDevices -SourceIds $sourceDeviceIds })
+    })
+    Write-Log "DUPLICATE: '$($group.Name)' | held by $($group.DeviceIDs -join ', ')" -Level WARNING
+}
+$Script:Stats.Duplicates = $Script:DuplicateNames.Count
+
+if ($Script:DuplicateNames.Count -gt 0) {
+    Write-Host "  ⚠️  $($Script:DuplicateNames.Count) name(s) are held by more than one device" -ForegroundColor Yellow
+    Write-Host "     Left as they are. A lookup by name can reach the wrong device; use the idx." -ForegroundColor Gray
+    foreach ($duplicate in $Script:DuplicateNames | Select-Object -First 5) {
+        Write-Host "       - '$($duplicate.Name)'" -ForegroundColor Yellow
+        foreach ($holder in $duplicate.Devices) {
+            Write-Host "         → $($holder.DeviceID) (Used=$($holder.Used), last update $($holder.LastUpdate))" -ForegroundColor Gray
+        }
+    }
+    if ($Script:DuplicateNames.Count -gt 5) {
+        Write-Host "       ... and $($Script:DuplicateNames.Count - 5) more (see the HTML report)" -ForegroundColor Gray
+    }
+    Write-Host "     Give one a distinct name with a renaming rule, or delete the one you do not need." -ForegroundColor Gray
+    Write-Host ""
+}
+
 # Count proposed changes
 $renameCount = @($Script:RenameList | Where-Object { $_.NameChanged }).Count
 $typeCount = @($Script:RenameList | Where-Object { $_.SwitchTypeChanged }).Count
@@ -2979,7 +3115,7 @@ $HtmlTempFallback = Join-Path $TempDir ("rename_report-{0}.html" -f $Timestamp)
 
 $finalHtmlPath = Write-SafeFile -PrimaryPath $HtmlPrimary -FallbackDbPath $HtmlDbFallback -FallbackTempPath $HtmlTempFallback -Description "HTML report" -Writer {
     param([string]$Path)
-    New-HtmlReport -OutputPath $Path -Stats $Script:Stats -RenameList $Script:RenameList -Collisions $Script:NameCollisions -ResolvedCollisions $Script:ResolvedCollisions -AmbiguousDevices $Script:AmbiguousDevices -OrphanedDevices $Script:OrphanedDevices -BackupPath $BackupPath -WasDryRun $DryRun
+    New-HtmlReport -OutputPath $Path -Stats $Script:Stats -RenameList $Script:RenameList -Collisions $Script:NameCollisions -ResolvedCollisions $Script:ResolvedCollisions -AmbiguousDevices $Script:AmbiguousDevices -OrphanedDevices $Script:OrphanedDevices -DuplicateNames $Script:DuplicateNames -BackupPath $BackupPath -WasDryRun $DryRun
 }
 
 $Script:Stopwatch.Stop()
@@ -2998,8 +3134,11 @@ $summaryContent = [ordered]@{
 }
 
 # Only surfaced when they have something to say, so the usual run's summary box
-# is byte-identical to previous versions. Inserted at the same index in reverse
-# order, which leaves them reading Ambiguous then Orphaned when both are shown.
+# is byte-identical to previous versions. All inserted at the same index, so
+# they read in the reverse of the order below.
+if ($Script:Stats.Duplicates -gt 0) {
+    $summaryContent.Insert(5, 'Duplicates', $Script:Stats.Duplicates)
+}
 if ($Script:Stats.Orphaned -gt 0) {
     $summaryContent.Insert(5, 'Orphaned', $Script:Stats.Orphaned)
 }

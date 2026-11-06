@@ -119,6 +119,14 @@
       "description": "Removes 'Current Value' suffix for dimmer/multilevel switch devices. No switchType - CC38 is used for both dimmers AND blinds."
     },
     {
+      "name": "Forest Shuttle Binary Switch",
+      "pattern": "37-0-currentValue$",
+      "replace": " - Current value$",
+      "with": " - Schakelaar",
+      "nodeMatch": { "productLabel": "Shuttle" },
+      "description": "A Forest Shuttle exposes one curtain as both CC37 and CC38, with the same label. Keeps the CC37 entity from taking the curtain's name. Must precede the generic Switch Binary rule: first match wins."
+    },
+    {
       "name": "Remove Current Value for Switch Binary",
       "pattern": "37-[01]-currentValue$",
       "replace": " - Current value$",
